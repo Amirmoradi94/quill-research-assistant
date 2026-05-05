@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from . import models, schemas
 from .seed import seed_if_empty
+from .quill import router as quill_router
 
 Base.metadata.create_all(bind=engine)
 seed_if_empty()
 
 app = FastAPI(title="Postdoc Application Dashboard", version="1.0.0")
+app.include_router(quill_router)
 
 app.add_middleware(
     CORSMiddleware,
