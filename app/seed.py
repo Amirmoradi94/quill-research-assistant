@@ -141,7 +141,7 @@ def seed_if_empty():
         for p in profs:
             db.add(models.Professor(**p))
         for f in fellowships:
-            db.add(models.Fellowship(**f))
+            db.add(models.Grant(**f))
         for a in activity:
             db.add(models.Activity(**a))
 

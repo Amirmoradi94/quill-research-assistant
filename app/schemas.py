@@ -48,7 +48,7 @@ class ProfessorOut(ProfessorBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-class FellowshipBase(BaseModel):
+class GrantBase(BaseModel):
     name: str
     deadline: Optional[str] = ""
     amount: Optional[str] = ""
@@ -56,9 +56,14 @@ class FellowshipBase(BaseModel):
     status: Optional[str] = "pending"
     notes: Optional[str] = ""
     url: Optional[str] = ""
+    source: Optional[str] = "manual"
+    match_score: Optional[int] = None
+    matched_reasons: Optional[list] = None
+    region: Optional[str] = None
+    discipline_tags: Optional[list] = None
 
 
-class FellowshipUpdate(BaseModel):
+class GrantUpdate(BaseModel):
     name: Optional[str] = None
     deadline: Optional[str] = None
     amount: Optional[str] = None
@@ -66,9 +71,14 @@ class FellowshipUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     url: Optional[str] = None
+    source: Optional[str] = None
+    match_score: Optional[int] = None
+    matched_reasons: Optional[list] = None
+    region: Optional[str] = None
+    discipline_tags: Optional[list] = None
 
 
-class FellowshipOut(FellowshipBase):
+class GrantOut(GrantBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
 

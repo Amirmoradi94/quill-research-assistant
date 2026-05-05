@@ -123,38 +123,42 @@ def delete_professor(pid: int, db: Session = Depends(get_db)):
     _log(db, f"Deleted professor: {name}")
 
 
-@app.get("/api/fellowships", response_model=List[schemas.FellowshipOut])
-def list_fellowships(db: Session = Depends(get_db)):
-    return db.query(models.Fellowship).order_by(models.Fellowship.id.asc()).all()
+@app.get("/api/grants", response_model=List[schemas.GrantOut])
+@app.get("/api/fellowships", response_model=List[schemas.GrantOut], include_in_schema=False)
+def list_grants(db: Session = Depends(get_db)):
+    return db.query(models.Grant).order_by(models.Grant.id.asc()).all()
 
 
-@app.post("/api/fellowships", response_model=schemas.FellowshipOut, status_code=201)
-def create_fellowship(f: schemas.FellowshipBase, db: Session = Depends(get_db)):
-    fel = models.Fellowship(**f.model_dump())
-    db.add(fel)
+@app.post("/api/grants", response_model=schemas.GrantOut, status_code=201)
+@app.post("/api/fellowships", response_model=schemas.GrantOut, status_code=201, include_in_schema=False)
+def create_grant(f: schemas.GrantBase, db: Session = Depends(get_db)):
+    g = models.Grant(**f.model_dump())
+    db.add(g)
     db.commit()
-    db.refresh(fel)
-    return fel
+    db.refresh(g)
+    return g
 
 
-@app.patch("/api/fellowships/{fid}", response_model=schemas.FellowshipOut)
-def update_fellowship(fid: int, patch: schemas.FellowshipUpdate, db: Session = Depends(get_db)):
-    fel = db.get(models.Fellowship, fid)
-    if not fel:
+@app.patch("/api/grants/{gid}", response_model=schemas.GrantOut)
+@app.patch("/api/fellowships/{gid}", response_model=schemas.GrantOut, include_in_schema=False)
+def update_grant(gid: int, patch: schemas.GrantUpdate, db: Session = Depends(get_db)):
+    g = db.get(models.Grant, gid)
+    if not g:
         raise HTTPException(404, "not found")
     for k, v in patch.model_dump(exclude_unset=True).items():
-        setattr(fel, k, v)
+        setattr(g, k, v)
     db.commit()
-    db.refresh(fel)
-    return fel
+    db.refresh(g)
+    return g
 
 
-@app.delete("/api/fellowships/{fid}", status_code=204)
-def delete_fellowship(fid: int, db: Session = Depends(get_db)):
-    fel = db.get(models.Fellowship, fid)
-    if not fel:
+@app.delete("/api/grants/{gid}", status_code=204)
+@app.delete("/api/fellowships/{gid}", status_code=204, include_in_schema=False)
+def delete_grant(gid: int, db: Session = Depends(get_db)):
+    g = db.get(models.Grant, gid)
+    if not g:
         raise HTTPException(404, "not found")
-    db.delete(fel)
+    db.delete(g)
     db.commit()
 
 
@@ -481,9 +485,9 @@ def export_all(db: Session = Depends(get_db)):
             schemas.ProfessorOut.model_validate(p).model_dump(mode="json")
             for p in db.query(models.Professor).all()
         ],
-        "fellowships": [
-            schemas.FellowshipOut.model_validate(f).model_dump(mode="json")
-            for f in db.query(models.Fellowship).all()
+        "grants": [
+            schemas.GrantOut.model_validate(g).model_dump(mode="json")
+            for g in db.query(models.Grant).all()
         ],
         "activity": [
             schemas.ActivityOut.model_validate(a).model_dump(mode="json")
