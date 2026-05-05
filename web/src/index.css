@@ -73,6 +73,33 @@ html, body, #root {
   height: 100%;
 }
 
+/* Quill chat motion */
+@keyframes qMsgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes qBlink {
+  0%, 50%        { opacity: 1; }
+  50.01%, 100%   { opacity: 0; }
+}
+
+.q-cursor::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: var(--color-brand-500);
+  border-radius: 1px;
+  animation: qBlink 1s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .q-cursor::after { animation: none; opacity: 0; }
+}
+
 body {
   margin: 0;
   background: var(--color-paper);
