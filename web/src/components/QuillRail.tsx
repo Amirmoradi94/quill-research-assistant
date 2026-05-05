@@ -110,7 +110,9 @@ export function QuillRail() {
   }
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    // Enter sends; Shift+Enter inserts a newline; Cmd/Ctrl+Enter still sends
+    // (so muscle memory keeps working for anyone used to chat apps).
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       send()
     }
@@ -166,52 +168,65 @@ export function QuillRail() {
         ))}
       </div>
 
-      <div className="px-4 pb-4 pt-2 border-t" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
+      <div className="px-4 pb-4 pt-3 border-t" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
         <div
-          className="relative rounded-md border px-3 py-2 pr-20 transition-all"
-          style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line-strong)' }}
+          className="quill-composer relative rounded-xl border px-4 pt-3.5 pb-12 transition-all"
+          style={{
+            background: 'var(--color-paper)',
+            borderColor: 'var(--color-line-strong)',
+            boxShadow: '0 1px 2px rgba(17,24,39,0.04)',
+          }}
         >
           <textarea
             ref={taRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}
-            placeholder="Ask Quill…"
+            placeholder="Ask Quill anything…"
             rows={1}
             disabled={running}
-            className="w-full bg-transparent border-0 outline-none resize-none text-[14px] leading-[1.55]"
-            style={{ color: 'var(--color-ink)', minHeight: 22, maxHeight: 180 }}
+            className="w-full bg-transparent border-0 outline-none resize-none text-[14px] leading-[1.6] placeholder:text-[color:var(--color-muted-2)]"
+            style={{ color: 'var(--color-ink)', minHeight: 56, maxHeight: 220 }}
           />
-          <div className="absolute right-2 bottom-2 flex gap-1">
-            <button className="p-1.5 rounded transition-colors hover:bg-[color:var(--color-paper-2)]" title="Attach">
-              <Paperclip size={14} style={{ color: 'var(--color-muted)' }} />
-            </button>
+
+          {/* Bottom toolbar inside the shell */}
+          <div className="absolute left-3 right-3 bottom-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <button
+                className="p-1.5 rounded-md transition-colors hover:bg-[color:var(--color-paper-2)]"
+                title="Attach"
+              >
+                <Paperclip size={15} style={{ color: 'var(--color-muted)' }} />
+              </button>
+              <span className="text-[10.5px] ml-1" style={{ color: 'var(--color-muted-2)' }}>
+                <kbd style={kbdStyle}>Enter</kbd>&nbsp;send
+                <span className="mx-1.5" style={{ opacity: 0.5 }}>·</span>
+                <kbd style={kbdStyle}>Shift</kbd>&nbsp;<kbd style={kbdStyle}>Enter</kbd>&nbsp;newline
+              </span>
+            </div>
             {running ? (
               <button
-                className="p-1.5 rounded transition-colors text-white"
+                className="quill-send px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95"
                 style={{ background: 'var(--color-ink)' }}
                 onClick={stop}
                 title="Stop"
               >
-                <Square size={14} fill="currentColor" />
+                <Square size={11} fill="currentColor" />
+                Stop
               </button>
             ) : (
               <button
-                className="p-1.5 rounded transition-colors disabled:opacity-40 text-white"
+                className="quill-send px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                 style={{ background: 'var(--color-brand-500)' }}
                 disabled={!text.trim()}
                 onClick={send}
-                title="Send (Cmd+Enter)"
+                title="Send (Enter)"
               >
-                <ArrowUp size={14} />
+                <ArrowUp size={13} />
+                Send
               </button>
             )}
           </div>
-        </div>
-        <div className="flex justify-between items-center mt-1.5 text-[11px]" style={{ color: 'var(--color-muted-2)' }}>
-          <span>
-            <kbd style={kbdStyle}>Cmd</kbd> + <kbd style={kbdStyle}>Enter</kbd> to send
-          </span>
         </div>
       </div>
     </aside>

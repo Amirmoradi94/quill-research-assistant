@@ -73,6 +73,13 @@ html, body, #root {
   height: 100%;
 }
 
+/* Composer focus ring */
+.quill-composer:focus-within {
+  border-color: var(--color-brand-500) !important;
+  background: var(--color-white) !important;
+  box-shadow: 0 0 0 3px var(--color-brand-50) !important;
+}
+
 /* Quill chat motion */
 @keyframes qMsgIn {
   from { opacity: 0; transform: translateY(8px); }

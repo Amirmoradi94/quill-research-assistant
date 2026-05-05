@@ -133,9 +133,30 @@ def select_provider(
 # ───────────────────────────────────────────────────────────────────
 _PROMPT_DIR = Path(__file__).parent / "prompts"
 
+# House style — auto-prepended to every rendered prompt so any text Quill
+# generates obeys these rules regardless of which workflow is running.
+HOUSE_STYLE = """\
+# House style (must be obeyed in every response)
+
+- Never use em-dashes (—). Use a comma, a period, or a semicolon instead.
+- Never use en-dashes (–) in prose. (Number ranges like "150–250 words" are fine.)
+- Always spell out IEEE journal names in full (e.g. "IEEE Transactions on
+  Intelligent Transportation Systems", not "IEEE T-ITS").
+- Be concise. Match the length the user asks for.
+- No marketing language. No filler ("It's worth noting that…", "I hope this helps").
+
+---
+
+"""
+
 
 def render_prompt(workflow: Workflow, **vars: Any) -> str:
-    """Render a workflow's prompt template with the given variables."""
+    """Render a workflow's prompt template with the given variables.
+
+    The HOUSE_STYLE preamble is prepended to every prompt — applies to all
+    workflows so we don't have to remember to copy these rules into each
+    template.
+    """
     # Lazy-import jinja2 so import-time errors don't break the package.
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -147,7 +168,7 @@ def render_prompt(workflow: Workflow, **vars: Any) -> str:
         lstrip_blocks=True,
     )
     template = env.get_template(f"{workflow.value}.md")
-    return template.render(**vars)
+    return HOUSE_STYLE + template.render(**vars)
 
 
 # ───────────────────────────────────────────────────────────────────
