@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Design Research: Postdoc Dashboard Redesign</title>
+<style>
+  :root {
+    --paper: #fbfaf7;
+    --ink: #1c2230;
+    --muted: #6b7280;
+    --line: #e7e3da;
+    --brand: #3b6fe0;
+    --brand-soft: #eef4ff;
+  }
+  body { background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; line-height: 1.65; max-width: 920px; margin: 0 auto; padding: 56px 32px 80px; }
+  h1 { font-size: 32px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h1 + blockquote { color: var(--muted); border-left: 3px solid var(--line); padding: 4px 0 4px 14px; margin: 0 0 32px; font-size: 14px; }
+  h2 { font-size: 22px; margin: 48px 0 12px; padding-top: 24px; border-top: 1px solid var(--line); letter-spacing: -0.01em; }
+  h3 { font-size: 17px; margin: 28px 0 8px; }
+  p, li { font-size: 15px; }
+  .tldr { background: var(--brand-soft); border-left: 4px solid var(--brand); padding: 16px 20px; border-radius: 6px; margin: 0 0 32px; }
+  .tldr p { margin: 0; }
+  pre { background: #f6f4ee; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.5; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  code { background: #f6f4ee; padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  pre code { background: transparent; padding: 0; }
+  img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 2px rgba(17,24,39,0.04), 0 4px 16px rgba(17,24,39,0.06); margin: 8px 0 4px; display: block; }
+  em { color: var(--muted); font-style: normal; font-size: 13.5px; display: block; margin: -2px 0 24px; }
+  ul, ol { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  a { color: var(--brand); }
+  a:hover { color: #264ba8; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; }
+  th { background: #f6f4ee; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  strong { color: var(--ink); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 500; }
+</style>
+</head>
+<body>
+
+<h1>Design Research: Postdoc Dashboard Redesign</h1>
+<blockquote>Generated 2026-05-04. Light-mode-only research for a self-hosted, AI-augmented postdoc application tracker. Aesthetic anchor: "calm tools" (Linear, Attio, Notion, Vercel, Cursor) — warmer / more academic, not enterprise-blue.</blockquote>
+
+<div class="tldr">
+<p><strong>TL;DR.</strong> Build a <strong>left-sidebar</strong> layout with a <strong>dimmed paper-toned sidebar</strong> (Linear's March-2026 refresh pattern) and a <strong>right-side AI activity drawer</strong> that streams agent output (VS Code Agent / Manus / Cursor pattern). Use <strong>table + Kanban toggle</strong> for the professor list (Huntr-meets-Teal). Inline <strong>✨ action buttons</strong> with Accept / Dismiss / Save-for-later for any AI-generated change — never auto-apply. Onboarding is a 3-step wizard with a vertical progress rail (TBR / Stripe pattern).</p>
+</div>
+
+<h2>Recommendations</h2>
+
+<h3>1. Left-sidebar nav with dimmed surface</h3>
+<p>Linear's March 2026 UI refresh dimmed sidebars to make the content area pop. Adopt the same: paper-tone sidebar (<code>#f5f3ee</code>), brighter content area (<code>#fbfaf7</code>). Single-pixel divider, no shadow.</p>
+<pre>┌──────────┬────────────────────────────────────┬──────┐
+│ AM ▾     │   Home                          ⏎  │      │
+│          │   ─────────────────────────────────│      │
+│ ⌂ Home   │                                    │   ✨ │
+│ 🔍 Disc. │   Good evening, Amir               │   ai │
+│ 👥 Profs │   ─ 3 follow-ups due ─             │   on │
+│ ✉ Drafts │   ┌────┬────┬────┬────┬────┬────┐  │      │
+│ 📤 Batch │   │ 47 │ 23 │ 18 │ 5  │ 3  │ 12%│  │      │
+│ 💰 Grants│   │tot │sent│reply│int │off │ rr │  │      │
+│ 📁 Docs  │   └────┴────┴────┴────┴────┴────┘  │      │
+│ 📅 Cal   │                                    │      │
+│ 📊 Activ │   Status breakdown   By university │      │
+│ ⚡ AI    │   [stacked bars]      [bar list]   │      │
+│ ⚙ Sett.  │                                    │      │
+└──────────┴────────────────────────────────────┴──────┘</pre>
+
+<h3>2. Right-side AI Activity Drawer with streaming</h3>
+<p>Pattern from VS Code Agent + Manus + Cursor: persistent collapsible 400px drawer streaming intermediate steps. <em>Don't</em> hide reasoning the way Devin does — users want to course-correct mid-run.</p>
+<pre>                                          ┌──────────────────┐
+                                          │ AI Activity   ✕  │
+                                          ├──────────────────┤
+                                          │ ⏳ Researching   │
+                                          │ Prof Singh @ UofT│
+                                          │ ─────────────────│
+                                          │ ✓ Found profile  │
+                                          │ ✓ Fetched lab    │
+                                          │ ⏳ Summarizing… │
+                                          │ ┊                │
+                                          │ ┊ "Currently work-│
+                                          │ ┊ ing on multi-  │
+                                          │ ┊ agent RL for…"│
+                                          │                  │
+                                          │ [Cancel]  [Hide] │
+                                          ├──────────────────┤
+                                          │ Queue (2)        │
+                                          │ • Draft email…   │
+                                          │ • Find grants…   │
+                                          └──────────────────┘</pre>
+
+<h3>3. Hybrid table-and-Kanban toggle</h3>
+<p>Huntr's Kanban for triage, Teal's spreadsheet for editing. Same data, single toggle.</p>
+<pre>┌────────────────────────────────────────────────────────┐
+│ Professors                          [≡ List][▦ Board]  │
+│ ─────────────────────────────────────────────────────  │
+│ Filter: [all] tier [all] status [all] uni [all] cat ⌫  │
+│ ─────────────────────────────────────────────────────  │
+│  #   Name             Uni        Tier  Status   Cat    │
+│  47  Prof. Singh      UofT       T1   drafting  ●AV    │
+│  46  Prof. Chen       McGill     T2   sent      ●RL    │
+└────────────────────────────────────────────────────────┘</pre>
+
+<h3>4. Inline ✨ buttons with explicit Accept / Dismiss</h3>
+<p>Contextual sparkle buttons beat a separate "AI mode." Never auto-apply — surface a suggestion chip the user explicitly accepts.</p>
+<pre>┌─ Edit Professor ─────────────────────────────┐
+│ Name        Prof. Aisha Singh                │
+│ University  University of Toronto            │
+│ Email       a.singh@cs.toronto.edu  ✨       │
+│ Lab URL     [empty]              [✨ Auto-fill]│
+│             ↳ ┌──── AI suggestion ─────────┐ │
+│               │ https://utml.toronto.edu   │ │
+│               │ Confidence: 94%            │ │
+│               │ [ Accept ✓ ] [ Dismiss ✕ ] │ │
+│               └────────────────────────────┘ │
+└──────────────────────────────────────────────┘</pre>
+
+<h3>5. Three-step onboarding wizard</h3>
+<p>Stripe + TBR pattern: vertical progress rail, single form per step, Continue enabled only when valid.</p>
+<pre>┌────────────────────────────────────────────────────┐
+│  ●─── Welcome                                      │
+│  │                                                 │
+│  ●─── Bring your work                              │
+│  │     ┌──────────────────────────────────────┐    │
+│  │     │  Drop your CV (PDF) here or browse  │    │
+│  │     │  ──────────────────────────────────  │    │
+│  │     │  Google Scholar URL  [_________]    │    │
+│  │     │  Personal page URL   [_________]    │    │
+│  │     └──────────────────────────────────────┘    │
+│  │                          [Skip] [Continue →]    │
+│  ○─── Review your profile                          │
+└────────────────────────────────────────────────────┘</pre>
+
+<h3>6. Discovery / Suggestions inbox</h3>
+<p>Spotify-Discover-Weekly meets Superhuman triage: ranked candidate cards with explanation, Accept / Save / Dismiss. Soft-delete on dismiss so we never re-suggest.</p>
+<pre>┌─ Professor Suggestions (12 new) ──────────────────┐
+│ ┌───────────────────────────────────────────────┐ │
+│ │ 92% match   Prof. Lin Hou   MIT  T1  ●AV     │ │
+│ │ ─────────────────────────────────────────────│ │
+│ │ "3 papers on adversarial AV in 2024-25;     │ │
+│ │  co-authored with Prof. Khan in your list"  │ │
+│ │  [Accept] [Save for later] [Dismiss]        │ │
+│ └───────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────┘</pre>
+
+<h2>Key Examples</h2>
+
+<h3>Home / overview dashboard</h3>
+<img src="references/01-glean-dashboard-with-activity-log.png" alt="Glean dashboard with activity log"/>
+<em>Glean — line chart on top, dense activity log below. Information density target. [Lazyweb]</em>
+
+<img src="references/02-userlane-kpi-cards-charts.png" alt="Userlane KPI cards"/>
+<em>Userlane — flat KPI cards with bar/line charts. Percentages-with-context pattern. [Lazyweb]</em>
+
+<img src="references/03-userlane-progress-stages-dashboard.png" alt="Userlane stages dashboard"/>
+<em>Userlane — segmented progress with collapsible streams. Adapt for drafting → sent → replied pipeline. [Lazyweb]</em>
+
+<h3>Contacts list (table)</h3>
+<img src="references/04-mercury-investor-database-table.png" alt="Mercury investor database"/>
+<em>Mercury — searchable, filterable investor table with chips. Columns scannable, no overflow. [Lazyweb]</em>
+
+<img src="references/05-wiza-prospect-search-cards.png" alt="Wiza prospect search"/>
+<em>Wiza — search-driven prospect grid with quick-action chips. Discovery inbox card pattern. [Lazyweb]</em>
+
+<h3>Pipeline / Kanban</h3>
+<img src="references/06-salesloft-pipeline-dashboard.png" alt="Salesloft pipeline"/>
+<em>Salesloft — pipeline with AI deal scoring and custom alerts. Closest analog to AI-augmented postdoc pipeline. [Lazyweb]</em>
+
+<img src="references/07-bonsai-pipeline-kanban-stages.png" alt="Bonsai pipeline kanban"/>
+<em>Bonsai — clean 4-stage kanban with deal cards. Direct template for our drafting → sent → replied → interview → offer. [Lazyweb]</em>
+
+<img src="references/08-briohr-applicant-pipeline.png" alt="BrioHR ATS pipeline"/>
+<em>BrioHR — ATS pipeline with stage cards + side preview panel. Split-pane "click row → preview" pattern. [Lazyweb]</em>
+
+<h3>AI / streaming / chat</h3>
+<img src="references/09-vscode-agent-right-sidebar.png" alt="VS Code Agent"/>
+<em>VS Code Agent — right-side chat panel. Drawer width and message density to copy. [Lazyweb]</em>
+
+<img src="references/10-manus-docs-with-ai-panel.png" alt="Manus docs with AI panel"/>
+<em>Manus — global "Ask AI" button + persistent right-side AI panel. Exactly our chat sidecar. [Lazyweb]</em>
+
+<img src="references/11-vibe-kanban-four-panel-layout.png" alt="Vibe-Kanban four-panel layout"/>
+<em>Vibe-Kanban — 4-panel workspace (sidebar / main / right rail / chat). Reference for overall page chrome. [Lazyweb]</em>
+
+<h3>Email composer</h3>
+<img src="references/12-amie-ai-email-generator.png" alt="Amie AI email generator"/>
+<em>Amie — AI email response generator with email-style preview. Body + tone-variant chip pattern. [Lazyweb]</em>
+
+<h3>Document manager</h3>
+<img src="references/13-gemini-documents-library.png" alt="Gemini documents library"/>
+<em>Gemini — minimal documents library with sidebar nav + file list. Restrained, no superfluous chrome. [Lazyweb]</em>
+
+<img src="references/14-scribd-document-library-cards.png" alt="Scribd document cards"/>
+<em>Scribd — PDF-card grid layout. Useful for visual previews (sample papers, CV thumbnails). [Lazyweb]</em>
+
+<h3>Onboarding wizard</h3>
+<img src="references/15-stripe-multi-step-onboarding.png" alt="Stripe multi-step onboarding"/>
+<em>Stripe — multi-step signup with progress bar. Calm, one-thing-per-screen. [Lazyweb]</em>
+
+<img src="references/16-tbr-onboarding-progress-vertical.png" alt="TBR onboarding"/>
+<em>TBR — vertical progress indicator on the left, single form per step. Direct template. [Lazyweb]</em>
+
+<h3>Settings / integrations</h3>
+<img src="references/17-userpilot-integrations-grid.png" alt="Userpilot integrations"/>
+<em>Userpilot — grid of integration tiles with "Connect" CTA. Useful for AI Providers screen. [Lazyweb]</em>
+
+<h2>Patterns</h2>
+<ol>
+<li><strong>Sidebar dimmer than main canvas</strong> — Linear's 2026 refresh makes this explicit.</li>
+<li><strong>Single accent color, never two</strong> — pick one and stick to it.</li>
+<li><strong>Status as colored pill, not colored row</strong> — pills with emoji + label scan faster.</li>
+<li><strong>Information density beats hero whitespace</strong> — Mercury / Salesloft / Glean push density.</li>
+<li><strong>Right rail for AI</strong> — VS Code, Manus, Cursor, Vibe-Kanban all converged.</li>
+<li><strong>Inline ✨ over global "AI" mode</strong> — Notion AI proved contextual beats modal.</li>
+<li><strong>Suggestion = explicit accept/dismiss</strong> — never auto-apply AI writes.</li>
+<li><strong>Empty states teach</strong> — clear copywriting + primary CTA, not <code>(no data)</code>.</li>
+</ol>
+
+<h2>Anti-Patterns</h2>
+<ol>
+<li>❌ Top-tab nav for &gt;6 sections</li>
+<li>❌ Glassmorphism / blur effects</li>
+<li>❌ Floating-action-button (FAB) for AI</li>
+<li>❌ Auto-applying AI writes without diff</li>
+<li>❌ "Start a chat" empty states (show a workflow button instead)</li>
+<li>❌ Two-column form layouts on narrow screens</li>
+<li>❌ Long-running operations without cancel</li>
+<li>❌ Marketing-page screenshots dressed up as product UIs</li>
+</ol>
+
+<h2>Unique Angles to Steal</h2>
+<ul>
+<li><strong>Linear's "calmer interface" framing.</strong> Dim the chrome, brighten the content. Single highest-leverage decision.</li>
+<li><strong>Cursor's "reasoning close to code."</strong> Show every step of AI work as it happens — Devin's hide-and-deliver model loses trust on long runs.</li>
+<li><strong>Manus's global "Ask AI" button.</strong> Persistent assistant entry point separate from contextual buttons.</li>
+<li><strong>Bonsai's stage-card density.</strong> Four pieces of info in 40px of vertical space via tight typography.</li>
+<li><strong>Smart Compose's "Tab to accept."</strong> Inline gray-text suggestions in the email composer.</li>
+<li><strong>Huntr Kanban + Teal spreadsheet.</strong> Don't pick — ship both views over the same data.</li>
+</ul>
+
+<h2>Findings</h2>
+
+<h3>What changed since this dashboard was first built</h3>
+<ul>
+<li><strong>AI as inline affordance, not a separate mode.</strong> Notion AI in 2024–25 proved this; everyone followed.</li>
+<li><strong>Right-rail agent panels are now a primitive.</strong> VS Code Agent, Cursor, Lovable, Manus all converged — users will already know how to use it.</li>
+</ul>
+
+<h3>Why we should not over-index on Linear</h3>
+<p>Linear is a project-management tool with a <em>team</em> in mind. Our product is single-user, document-heavy, AI-augmented. We borrow Linear's information-density and calm-chrome principles, not their team-collab features (pulse, cycles). Attio's record-page pattern (single contact = full page) may be a better Phase-2 target for the professor view.</p>
+
+<h2>Sources</h2>
+<ul>
+<li><a href="https://linear.app/now/how-we-redesigned-the-linear-ui">How we redesigned the Linear UI (part Ⅱ)</a></li>
+<li><a href="https://linear.app/changelog/2026-03-12-ui-refresh">Linear UI refresh changelog (March 2026)</a></li>
+<li><a href="https://linear.app/now/behind-the-latest-design-refresh">A calmer interface for a product in motion — Linear</a></li>
+<li><a href="https://www.builder.io/blog/devin-vs-cursor">Devin vs Cursor: Developers choose AI tools 2026</a></li>
+<li><a href="https://thenuancedperspective.substack.com/p/the-ai-agent-stack-in-2026">The AI Agent Stack in 2026</a></li>
+<li><a href="https://deepfounder.ai/ai-coding-agents-2026-guide/">AI Coding Agents 2026 — DeepFounder</a></li>
+<li><a href="https://prentus.com/blog/we-found-the-5-best-job-tracker-tools-on-the-market">Best Job Tracker Apps 2026</a></li>
+<li><a href="https://www.careerflow.ai/blog/huntr-vs-teal-vs-careerflow">Huntr vs Teal vs Careerflow</a></li>
+<li><a href="https://thedesignsystem.guide/blog/ai-ux-patterns-for-design-systems-(part-1)">AI UX patterns for design systems</a></li>
+<li><a href="https://www.pencilandpaper.io/articles/empty-states">Empty State UX Examples — Pencil &amp; Paper</a></li>
+<li><a href="https://www.saasui.design/pattern/empty-state/linear">Linear Empty State teardown — SaaSUI</a></li>
+<li><a href="https://pageflows.com/post/desktop-web/onboarding/linear/">Onboarding on Linear Desktop — Page Flows</a></li>
+</ul>
+
+</body>
+</html>

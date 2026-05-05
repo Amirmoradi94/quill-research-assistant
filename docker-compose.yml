@@ -1,0 +1,14 @@
+services:
+  dashboard:
+    build: .
+    image: postdoc-dashboard:latest
+    container_name: postdoc-dashboard
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ../applications.md:/app/seed/applications.md:ro
+    restart: unless-stopped
+    environment:
+      - POSTDOC_DB=/app/data/postdoc.db
+      - APPLICATIONS_MD=/app/seed/applications.md

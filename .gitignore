@@ -1,0 +1,41 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# SQLite — user data, never committed (self-hosted, per-user)
+*.db
+*.db.bak.*
+*.sqlite
+*.sqlite3
+
+# Node / Vite (for the upcoming web/ package)
+node_modules/
+dist/
+.vite/
+*.local
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build / logs
+*.log
+*.tmp

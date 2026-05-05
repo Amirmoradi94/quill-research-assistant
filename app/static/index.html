@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Postdoc Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            paper: '#fbfaf7',
+            ink:   '#1c2230',
+            muted: '#6b7280',
+            line:  '#e7e3da',
+            brand: { 50:'#eef4ff', 100:'#dde8ff', 200:'#bcd0ff', 500:'#3b6fe0', 600:'#2f5ccb', 700:'#264ba8' },
+          },
+          fontFamily: {
+            sans: ['Inter','ui-sans-serif','system-ui','-apple-system','sans-serif'],
+            mono: ['JetBrains Mono','ui-monospace','monospace'],
+          },
+          boxShadow: {
+            card: '0 1px 2px rgba(17,24,39,0.04), 0 1px 3px rgba(17,24,39,0.06)',
+            soft: '0 4px 16px rgba(17,24,39,0.06)',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-paper text-ink font-sans min-h-screen" x-data="dashboard()" x-init="init()">
+
+  <header class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-line">
+    <div class="max-w-[1500px] mx-auto px-6 py-3 flex items-center gap-5">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white text-sm">AM</div>
+        <div>
+          <h1 class="text-base font-semibold leading-tight">Postdoc Dashboard</h1>
+          <p class="text-xs text-muted leading-tight">Tracking Amir's applications</p>
+        </div>
+      </div>
+      <nav class="flex gap-1 ml-2">
+        <template x-for="t in tabs" :key="t.key">
+          <button @click="view=t.key"
+            :class="view===t.key ? 'bg-brand-500 text-white shadow-card' : 'text-muted hover:text-ink hover:bg-line/60'"
+            class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5">
+            <span x-text="t.icon"></span>
+            <span x-text="t.label"></span>
+          </button>
+        </template>
+      </nav>
+      <div class="ml-auto flex items-center gap-3">
+        <div class="hidden md:flex items-center gap-1.5 text-xs text-muted">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          <span x-text="stats.total+' professors · '+stats.sent_count+' sent · '+stats.response_rate+'% response'"></span>
+        </div>
+        <button @click="openCreate()" class="px-3 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">+ Professor</button>
+        <a href="/api/export" target="_blank" title="Download JSON export" class="text-muted hover:text-ink text-sm">⬇</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-[1500px] mx-auto px-6 py-7 space-y-7">
+
+    <!-- OVERVIEW -->
+    <section x-show="view==='overview'" x-transition class="space-y-7">
+      <div>
+        <h2 class="text-xl font-semibold">Good to see you back, Amir 👋</h2>
+        <p class="text-muted text-sm mt-1">Here's where your postdoc search stands today.</p>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <template x-for="card in kpis" :key="card.label">
+          <div class="bg-white border border-line rounded-xl p-4 shadow-card relative overflow-hidden">
+            <div class="text-[11px] uppercase tracking-wider text-muted font-medium" x-text="card.label"></div>
+            <div class="text-2xl font-semibold mt-1.5" x-text="card.value"></div>
+            <div x-show="card.sub" class="text-xs text-muted mt-1" x-text="card.sub"></div>
+            <div class="absolute -right-3 -top-3 w-12 h-12 rounded-full opacity-10" :class="card.bg"></div>
+          </div>
+        </template>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div class="bg-white border border-line rounded-xl p-5 shadow-card">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold">Status breakdown</h3>
+            <button @click="view='pipeline'" class="text-xs text-brand-500 hover:text-brand-700">Open pipeline →</button>
+          </div>
+          <div class="space-y-2.5">
+            <template x-for="s in statusKeys" :key="s">
+              <div class="flex items-center gap-3">
+                <div class="w-28 text-xs font-medium text-ink flex items-center gap-1.5">
+                  <span x-text="statusEmoji(s)"></span>
+                  <span x-text="statusName(s)"></span>
+                </div>
+                <div class="flex-1 h-6 bg-line/50 rounded-md overflow-hidden">
+                  <div class="h-full transition-all" :class="statusBar(s)" :style="'width:'+((stats.by_status[s]||0)/Math.max(stats.total,1)*100)+'%'"></div>
+                </div>
+                <div class="w-8 text-right text-sm font-mono text-ink" x-text="stats.by_status[s]||0"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="bg-white border border-line rounded-xl p-5 shadow-card">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-sm font-semibold">Applications by university</h3>
+            <span class="text-xs text-muted" x-text="Object.keys(stats.by_university||{}).length+' universities'"></span>
+          </div>
+          <div class="space-y-2.5">
+            <template x-for="[u, c] in Object.entries(stats.by_university||{}).sort((a,b)=>b[1]-a[1])" :key="u">
+              <div class="flex items-center gap-3">
+                <div class="w-24 text-xs font-medium truncate" x-text="u || '(none)'"></div>
+                <div class="flex-1 h-6 bg-line/50 rounded-md overflow-hidden">
+                  <div class="h-full bg-gradient-to-r from-brand-500 to-brand-200" :style="'width:'+(c/Math.max(stats.total,1)*100)+'%'"></div>
+                </div>
+                <div class="w-8 text-right text-sm font-mono" x-text="c"></div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-200 rounded-xl p-5" x-show="followups.length">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-amber-600">⏰</span>
+            <h3 class="text-sm font-semibold text-amber-900">Follow-ups due</h3>
+            <span class="text-xs text-amber-700">Sent more than 14 days ago, no reply yet</span>
+          </div>
+          <span class="text-xs text-amber-700 font-mono" x-text="followups.length+' pending'"></span>
+        </div>
+        <div class="space-y-1.5">
+          <template x-for="p in followups" :key="p.id">
+            <div class="flex items-center gap-3 p-2.5 bg-white rounded-md hover:shadow-card cursor-pointer border border-transparent hover:border-amber-200" @click="openEdit(p)">
+              <span class="text-xs font-mono text-muted w-8" x-text="'#'+p.number"></span>
+              <span class="font-medium flex-1 truncate" x-text="p.name"></span>
+              <span class="text-xs text-muted" x-text="p.university"></span>
+              <span class="text-xs text-amber-700 font-mono" x-text="daysSince(p.date_sent)+' days'"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div class="bg-white border border-line rounded-xl p-5 shadow-card">
+          <h3 class="text-sm font-semibold mb-3">Recent activity</h3>
+          <div class="space-y-2">
+            <template x-for="a in activity.slice(0,6)" :key="a.id">
+              <div class="flex gap-3 text-sm py-1">
+                <span class="text-xs font-mono text-muted w-20 flex-shrink-0" x-text="a.date"></span>
+                <span class="text-ink flex-1" x-text="a.action"></span>
+              </div>
+            </template>
+            <div x-show="!activity.length" class="text-sm text-muted italic">No activity yet.</div>
+          </div>
+        </div>
+        <div class="bg-white border border-line rounded-xl p-5 shadow-card">
+          <h3 class="text-sm font-semibold mb-3">Tier distribution</h3>
+          <div class="space-y-3">
+            <template x-for="t in ['T1','T2','T3']" :key="t">
+              <div>
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span class="font-medium flex items-center gap-1.5">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-mono" :class="tierPill(t)" x-text="t"></span>
+                    <span x-text="tierLabel(t)"></span>
+                  </span>
+                  <span class="text-muted font-mono" x-text="(stats.by_tier[t]||0)+' profs'"></span>
+                </div>
+                <div class="h-2.5 bg-line/50 rounded-full overflow-hidden">
+                  <div class="h-full" :class="tierBar(t)" :style="'width:'+((stats.by_tier[t]||0)/Math.max(stats.total,1)*100)+'%'"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PIPELINE -->
+    <section x-show="view==='pipeline'" x-transition>
+      <div class="mb-5 flex items-baseline justify-between">
+        <div>
+          <h2 class="text-xl font-semibold">Application pipeline</h2>
+          <p class="text-sm text-muted mt-0.5">Click any card to update its status or notes.</p>
+        </div>
+        <div class="text-xs text-muted" x-text="professors.length+' total · drag-free, click-to-edit'"></div>
+      </div>
+      <div class="flex gap-4 overflow-x-auto pb-4">
+        <template x-for="col in pipelineCols" :key="col.status">
+          <div class="flex-shrink-0 w-72 bg-line/30 rounded-xl p-3 border border-line">
+            <div class="flex items-center justify-between mb-3 px-1">
+              <div class="flex items-center gap-2">
+                <span class="text-base" x-text="statusEmoji(col.status)"></span>
+                <h4 class="text-sm font-semibold" x-text="statusName(col.status)"></h4>
+              </div>
+              <span class="text-xs text-muted font-mono bg-white px-1.5 py-0.5 rounded" x-text="professorsByStatus(col.status).length"></span>
+            </div>
+            <div class="space-y-2 max-h-[calc(100vh-240px)] overflow-y-auto pr-1">
+              <template x-for="p in professorsByStatus(col.status)" :key="p.id">
+                <div @click="openEdit(p)" class="bg-white border border-line hover:border-brand-500 hover:shadow-card rounded-lg p-3 cursor-pointer transition-all">
+                  <div class="flex items-start justify-between mb-1 gap-2">
+                    <span class="font-medium text-sm leading-snug" x-text="p.name"></span>
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded flex-shrink-0" :class="tierPill(p.tier)" x-text="p.tier"></span>
+                  </div>
+                  <div class="text-xs text-muted" x-text="p.university+(p.dept_lab?' · '+p.dept_lab:'')"></div>
+                  <div x-show="p.notes" class="text-xs text-muted mt-1.5 line-clamp-2 italic" x-text="p.notes"></div>
+                  <div x-show="p.date_sent" class="text-[10px] text-muted mt-2 font-mono" x-text="'sent '+p.date_sent"></div>
+                </div>
+              </template>
+              <div x-show="!professorsByStatus(col.status).length" class="text-xs text-muted text-center py-6 italic">Nothing here yet</div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- PROFESSORS -->
+    <section x-show="view==='professors'" x-transition class="space-y-4">
+      <div class="flex items-baseline justify-between">
+        <div>
+          <h2 class="text-xl font-semibold">All professors</h2>
+          <p class="text-sm text-muted mt-0.5">Filter, search, click any row to edit.</p>
+        </div>
+        <span class="text-sm text-muted" x-text="displayedProfessors.length+' shown'+(filters.category ? ' / '+professors.length+' total' : '')"></span>
+      </div>
+
+      <div class="bg-white border border-line rounded-xl p-3 shadow-card">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Research areas — click to filter</div>
+          <button x-show="filters.category" @click="filters.category=''; load()" class="text-xs text-brand-600 hover:text-brand-700">Show all</button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <template x-for="c in categoryKeys" :key="c">
+            <button @click="filters.category = (filters.category===c ? '' : c); load()"
+              class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all"
+              :class="[categoryRow(c), filters.category===c ? 'ring-2 ring-offset-1 ring-ink/30 font-semibold' : (filters.category ? 'opacity-50 hover:opacity-100' : '')]">
+              <span class="w-2 h-2 rounded-full" :class="categoryDot(c)"></span>
+              <span x-text="categoryLabel(c)"></span>
+              <span class="text-muted font-mono" x-text="'· '+(categoryCounts()[c]||0)"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <div class="bg-white border border-line rounded-xl p-3 flex flex-wrap gap-2 items-center shadow-card">
+        <div class="relative flex-1 min-w-[220px]">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted">🔍</span>
+          <input type="text" x-model="filters.q" @input.debounce.300ms="load()" placeholder="Search name, lab, notes, research angle..."
+            class="w-full bg-paper border border-line rounded-md pl-9 pr-3 py-2 text-sm focus:border-brand-500 focus:bg-white outline-none transition" />
+        </div>
+        <select x-model="filters.tier" @change="load()" class="bg-paper border border-line rounded-md px-3 py-2 text-sm">
+          <option value="">All tiers</option><option>T1</option><option>T2</option><option>T3</option>
+        </select>
+        <select x-model="filters.status" @change="load()" class="bg-paper border border-line rounded-md px-3 py-2 text-sm">
+          <option value="">All statuses</option>
+          <template x-for="s in statusKeys" :key="s"><option :value="s" x-text="statusName(s)"></option></template>
+        </select>
+        <select x-model="filters.university" @change="load()" class="bg-paper border border-line rounded-md px-3 py-2 text-sm">
+          <option value="">All universities</option>
+          <template x-for="u in universityList" :key="u"><option :value="u" x-text="u"></option></template>
+        </select>
+        <select x-model="filters.category" @change="load()" class="bg-paper border border-line rounded-md px-3 py-2 text-sm">
+          <option value="">All research areas</option>
+          <template x-for="c in categoryKeys" :key="c"><option :value="c" x-text="categoryLabel(c)"></option></template>
+        </select>
+        <label class="inline-flex items-center gap-1.5 text-sm text-amber-700 cursor-pointer px-2 py-1.5 rounded-md hover:bg-amber-50">
+          <input type="checkbox" x-model="filters.missingEmail" class="accent-amber-600"/>
+          <span>⚠️ Missing email</span>
+          <span class="text-xs text-muted font-mono" x-text="'('+professors.filter(p=>!p.email).length+')'"></span>
+        </label>
+        <button @click="filters={q:'',tier:'',status:'',university:'',category:'',missingEmail:false};load()" class="text-xs text-muted hover:text-ink px-2">Clear</button>
+      </div>
+
+      <div class="bg-white border border-line rounded-xl overflow-hidden shadow-card">
+        <table class="w-full text-sm">
+          <thead class="bg-paper text-left text-[11px] uppercase tracking-wider text-muted border-b border-line">
+            <tr>
+              <th class="px-4 py-2.5 w-12">#</th>
+              <th class="px-4 py-2.5">Professor</th>
+              <th class="px-4 py-2.5">University</th>
+              <th class="px-4 py-2.5">Department</th>
+              <th class="px-4 py-2.5 w-16">Tier</th>
+              <th class="px-4 py-2.5 w-28">Status</th>
+              <th class="px-4 py-2.5 w-28">Date sent</th>
+              <th class="px-4 py-2.5">Research Interests</th>
+              <th class="px-4 py-2.5 w-16">Profile</th>
+              <th class="px-4 py-2.5 w-10"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="p in displayedProfessors" :key="p.id">
+              <tr class="border-t border-line cursor-pointer transition-colors" :class="categoryRow(p.research_category)" @click="openEdit(p)">
+                <td class="px-4 py-2.5 text-muted font-mono text-xs" x-text="p.number"></td>
+                <td class="px-4 py-2.5 font-medium">
+                  <span x-text="p.name"></span>
+                  <span x-show="!p.email" class="ml-1.5 text-amber-600" title="No email recorded">⚠️</span>
+                </td>
+                <td class="px-4 py-2.5" x-text="p.university"></td>
+                <td class="px-4 py-2.5 text-muted text-xs" x-text="(p.dept_lab||'').split('/')[0].trim()"></td>
+                <td class="px-4 py-2.5">
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono" :class="tierPill(p.tier)" x-text="p.tier"></span>
+                </td>
+                <td class="px-4 py-2.5">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs" :class="statusPill(p.status)">
+                    <span x-text="statusEmoji(p.status)"></span><span x-text="statusName(p.status)"></span>
+                  </span>
+                </td>
+                <td class="px-4 py-2.5 text-xs text-muted font-mono" x-text="p.date_sent||'—'"></td>
+                <td class="px-4 py-2.5 text-muted text-xs max-w-xs truncate" x-text="p.research_interests"></td>
+                <td class="px-4 py-2.5 text-center" @click.stop>
+                  <a x-show="p.profile_url" :href="p.profile_url" target="_blank" rel="noopener" class="text-brand-500 hover:text-brand-700 text-xs" title="Open profile">🔗</a>
+                  <span x-show="!p.profile_url" class="text-muted text-xs">—</span>
+                </td>
+                <td class="px-4 py-2.5 text-muted hover:text-rose-600 text-center" @click.stop="del(p)" title="Delete">×</td>
+              </tr>
+            </template>
+            <tr x-show="!displayedProfessors.length"><td colspan="10" class="text-center py-10 text-muted italic">No professors match your filters.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- READY TO SEND -->
+    <section x-show="view==='ready'" x-transition class="space-y-4">
+      <div class="flex items-baseline justify-between flex-wrap gap-3">
+        <div>
+          <h2 class="text-xl font-semibold">Ready to send 🚀</h2>
+          <p class="text-sm text-muted mt-0.5">Drafts grouped into batches that won't look like a mass send. No two professors from the same department or lab in one batch; at most <span x-text="batchData.max_per_university"></span> per university; categories spread to mix research areas; suggested send dates Tue / Wed / Thu.</p>
+        </div>
+        <div class="flex items-center gap-3 text-xs">
+          <label class="flex items-center gap-1.5">
+            <span class="text-muted">Batch size</span>
+            <input type="number" min="3" max="20" x-model.number="batchSize" @change="loadBatches()" class="w-14 bg-paper border border-line rounded-md px-2 py-1 text-sm"/>
+          </label>
+          <label class="flex items-center gap-1.5">
+            <span class="text-muted">Max per uni</span>
+            <input type="number" min="1" max="5" x-model.number="maxPerUni" @change="loadBatches()" class="w-12 bg-paper border border-line rounded-md px-2 py-1 text-sm"/>
+          </label>
+          <button @click="loadBatches()" class="text-brand-600 hover:text-brand-700">Recompute ↻</button>
+        </div>
+      </div>
+
+      <!-- Headline stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="bg-white border border-line rounded-xl p-4 shadow-card">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Eligible drafts</div>
+          <div class="text-2xl font-semibold mt-1" x-text="batchData.total_eligible"></div>
+          <div class="text-xs text-muted mt-0.5">complete + has email</div>
+        </div>
+        <div class="bg-white border border-line rounded-xl p-4 shadow-card">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Batches</div>
+          <div class="text-2xl font-semibold mt-1" x-text="batchData.total_batches"></div>
+          <div class="text-xs text-muted mt-0.5">at <span x-text="batchData.batch_size"></span> per batch</div>
+        </div>
+        <div class="bg-white border border-line rounded-xl p-4 shadow-card">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Skipped</div>
+          <div class="text-2xl font-semibold mt-1" x-text="batchData.skipped.length"></div>
+          <div class="text-xs text-muted mt-0.5">missing email / subject / body</div>
+        </div>
+        <div class="bg-white border border-line rounded-xl p-4 shadow-card">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Pacing</div>
+          <div class="text-2xl font-semibold mt-1" x-text="(batchData.batches[0]?.send_date)||'—'"></div>
+          <div class="text-xs text-muted mt-0.5">first batch ships</div>
+        </div>
+      </div>
+
+      <!-- Skipped warning -->
+      <div x-show="batchData.skipped.length" class="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-card">
+        <div class="flex items-baseline justify-between">
+          <div>
+            <div class="font-medium text-amber-900">⚠️ <span x-text="batchData.skipped.length"></span> drafts skipped</div>
+            <div class="text-sm text-amber-800 mt-0.5">Add the missing field on the professor or the draft to make these eligible. Most common: no email recorded for the professor.</div>
+          </div>
+          <details class="text-xs">
+            <summary class="cursor-pointer text-amber-700 hover:text-amber-900">Show list</summary>
+            <div class="mt-3 max-h-64 overflow-y-auto pr-2">
+              <template x-for="s in batchData.skipped" :key="s.draft_id">
+                <div class="py-1 border-b border-amber-100 flex items-center justify-between gap-3">
+                  <span class="font-medium text-amber-900" x-text="s.name"></span>
+                  <span class="text-amber-700 font-mono" x-text="s.reasons.join(', ')"></span>
+                </div>
+              </template>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- Toast -->
+      <div x-show="copyToast" x-transition class="fixed bottom-6 right-6 z-50 bg-ink text-white px-4 py-2 rounded-lg shadow-soft text-sm" x-text="copyToast"></div>
+
+      <!-- Batches -->
+      <div class="space-y-4" x-show="batchData.batches.length">
+        <template x-for="b in batchData.batches" :key="b.batch_num">
+          <div class="bg-white border border-line rounded-xl shadow-card overflow-hidden">
+            <div class="px-5 py-3 border-b border-line bg-paper flex flex-wrap items-center justify-between gap-3">
+              <div class="flex items-center gap-3">
+                <div class="text-2xl font-bold text-brand-700">#<span x-text="b.batch_num"></span></div>
+                <div>
+                  <div class="font-medium" x-text="b.size+' drafts · '+b.send_weekday+' '+b.send_date"></div>
+                  <div class="text-xs text-muted mt-0.5">
+                    <span x-text="b.universities.length+' universities'"></span> ·
+                    <span x-text="b.category_mix.length+' research areas'"></span> ·
+                    <span x-text="'tiers ' + b.tier_mix.join(', ')"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="flex flex-wrap gap-1">
+                  <template x-for="c in b.category_mix" :key="c">
+                    <span class="w-2.5 h-2.5 rounded-full" :class="categoryDot(c)" :title="categoryLabel(c)"></span>
+                  </template>
+                </div>
+                <button @click="copyBatchCommand(b.batch_num)" class="px-3 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">📋 Copy push command</button>
+              </div>
+            </div>
+            <div class="divide-y divide-line">
+              <template x-for="dr in b.drafts" :key="dr.draft_id">
+                <div class="p-3 flex items-center gap-3" :class="categoryRow(dr.category)">
+                  <span class="w-2 h-2 rounded-full flex-shrink-0" :class="categoryDot(dr.category)"></span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-mono" :class="tierPill(dr.tier)" x-text="dr.tier"></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium truncate" x-text="dr.name"></div>
+                    <div class="text-xs text-muted truncate">
+                      <span x-text="dr.university"></span>
+                      <span x-show="dr.dept_lab"> · <span x-text="dr.dept_lab"></span></span>
+                      <span> · <span x-text="dr.email"></span></span>
+                    </div>
+                  </div>
+                  <div class="text-xs text-muted truncate max-w-md" x-text="dr.subject"></div>
+                  <div class="text-[11px] text-muted font-mono flex-shrink-0" x-text="dr.word_count+' w'"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="!batchData.batches.length && batchData.total_eligible===0" class="bg-white border border-line rounded-xl p-10 text-center shadow-card">
+        <div class="text-4xl mb-3">📭</div>
+        <h3 class="font-medium">No eligible drafts</h3>
+        <p class="text-sm text-muted mt-1">Drafts need a recipient email, a subject, and a body to be batched. Check the skipped list above.</p>
+      </div>
+    </section>
+
+    <!-- DRAFTS -->
+    <section x-show="view==='drafts'" x-transition class="space-y-4">
+      <div class="flex items-baseline justify-between flex-wrap gap-3">
+        <div>
+          <h2 class="text-xl font-semibold">Email drafts</h2>
+          <p class="text-sm text-muted mt-0.5">One draft per professor. Open any to edit — autosaves as you type.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-muted" x-text="displayedDrafts.length+' shown'+(draftsCategory ? ' / '+drafts.length+' total' : '')"></span>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-sm">🔍</span>
+            <input type="text" x-model="draftsQ" @input.debounce.300ms="loadDrafts()" placeholder="Search drafts..."
+              class="bg-white border border-line rounded-md pl-9 pr-3 py-2 text-sm focus:border-brand-500 outline-none w-64"/>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-line rounded-xl p-3 shadow-card" x-show="drafts.length">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[11px] uppercase tracking-wider text-muted">Research areas — click to filter</div>
+          <button x-show="draftsCategory" @click="draftsCategory=''" class="text-xs text-brand-600 hover:text-brand-700">Show all</button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <template x-for="c in categoryKeys" :key="c">
+            <button @click="draftsCategory = (draftsCategory===c ? '' : c)"
+              class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all"
+              :class="[categoryRow(c), draftsCategory===c ? 'ring-2 ring-offset-1 ring-ink/30 font-semibold' : (draftsCategory ? 'opacity-50 hover:opacity-100' : '')]">
+              <span class="w-2 h-2 rounded-full" :class="categoryDot(c)"></span>
+              <span x-text="categoryLabel(c)"></span>
+              <span class="text-muted font-mono" x-text="'· '+(draftsCategoryCounts()[c]||0)"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <div class="bg-white border border-line rounded-xl shadow-card overflow-hidden" x-show="drafts.length">
+        <div class="divide-y divide-line">
+          <template x-for="d in displayedDrafts" :key="d.id">
+            <div @click="openDraftFromList(d)" class="p-4 cursor-pointer transition-colors" :class="categoryRow(d.professor_research_category)">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-medium" x-text="d.professor_name"></span>
+                    <span x-show="!d.professor_email" class="text-amber-600 text-xs" title="No email recorded for this professor">⚠️ no email</span>
+                    <span class="text-xs text-muted" x-text="d.professor_university"></span>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px]" :class="statusPill(d.professor_status)">
+                      <span x-text="statusEmoji(d.professor_status)"></span><span x-text="statusName(d.professor_status)"></span>
+                    </span>
+                  </div>
+                  <div class="text-sm font-medium mt-1.5 truncate" x-text="d.subject || '(no subject yet)'" :class="d.subject ? '' : 'italic text-muted'"></div>
+                  <div class="text-xs text-muted mt-1 line-clamp-2" x-text="draftPreview(d.body) || '(empty — click to start writing)'"></div>
+                </div>
+                <div class="flex-shrink-0 text-right">
+                  <div class="text-[11px] text-muted font-mono" x-text="'updated ' + new Date(d.updated_at).toLocaleDateString()"></div>
+                  <div class="text-[11px] text-muted" x-text="(d.body||'').split(/\s+/).filter(Boolean).length + ' words'"></div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div x-show="!drafts.length" class="bg-white border border-line rounded-xl p-10 text-center shadow-card">
+        <div class="text-4xl mb-3">✉️</div>
+        <h3 class="font-medium">No drafts yet</h3>
+        <p class="text-sm text-muted mt-1">Open any professor (from Pipeline or Professors), then click <strong>Compose email</strong> to start a draft.</p>
+        <button @click="view='professors'" class="mt-4 px-4 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">Browse professors</button>
+      </div>
+    </section>
+
+    <!-- FELLOWSHIPS -->
+    <section x-show="view==='fellowships'" x-transition class="space-y-5">
+      <div class="flex items-baseline justify-between">
+        <div>
+          <h2 class="text-xl font-semibold">Fellowships & funding</h2>
+          <p class="text-sm text-muted mt-0.5">Track deadlines, amounts, and eligibility.</p>
+        </div>
+        <button @click="openFellowshipCreate()" class="px-3 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">+ Fellowship</button>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <template x-for="f in fellowships" :key="f.id">
+          <div class="bg-white border border-line rounded-xl p-5 shadow-card hover:shadow-soft hover:border-brand-500 transition-all cursor-pointer" @click="openFellowshipEdit(f)">
+            <div class="flex items-start justify-between mb-3 gap-2">
+              <h3 class="font-semibold leading-snug" x-text="f.name"></h3>
+              <span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0" :class="fellowshipPill(f.status)" x-text="f.status"></span>
+            </div>
+            <dl class="grid grid-cols-2 gap-y-2 gap-x-3 text-xs">
+              <dt class="text-muted">Deadline</dt><dd class="font-medium" x-text="f.deadline||'—'"></dd>
+              <dt class="text-muted">Amount</dt><dd class="font-medium" x-text="f.amount||'—'"></dd>
+              <dt class="text-muted col-span-2 mt-1">Eligibility</dt>
+              <dd class="col-span-2" x-text="f.eligibility||'—'"></dd>
+            </dl>
+            <div x-show="f.notes" class="text-xs text-muted mt-3 border-t border-line pt-3" x-text="f.notes"></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ACTIVITY -->
+    <section x-show="view==='activity'" x-transition class="space-y-4">
+      <div>
+        <h2 class="text-xl font-semibold">Activity log</h2>
+        <p class="text-sm text-muted mt-0.5">Every status change is recorded automatically.</p>
+      </div>
+      <div class="bg-white border border-line rounded-xl shadow-card divide-y divide-line">
+        <template x-for="a in activity" :key="a.id">
+          <div class="flex gap-4 p-3.5 text-sm hover:bg-paper/70">
+            <span class="text-xs font-mono text-muted w-24 flex-shrink-0" x-text="a.date"></span>
+            <span class="flex-1" x-text="a.action"></span>
+          </div>
+        </template>
+        <div x-show="!activity.length" class="p-8 text-center text-muted italic">Activity will appear here as you update applications.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="max-w-[1500px] mx-auto px-6 py-6 text-xs text-muted flex items-center justify-between border-t border-line mt-6">
+    <span>Dashboard running locally · data in <code class="bg-line/40 px-1.5 py-0.5 rounded">data/postdoc.db</code></span>
+    <span>Built with FastAPI + Alpine.js</span>
+  </footer>
+
+  <!-- Professor modal -->
+  <div x-show="editing" x-transition.opacity class="fixed inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4" @click.self="editing=null" @keydown.escape.window="editing=null" style="display:none">
+    <div class="bg-white border border-line rounded-xl w-full max-w-2xl p-6 shadow-soft max-h-[90vh] overflow-y-auto" x-show="editing">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 class="text-lg font-semibold" x-text="editing?.id ? 'Edit professor' : 'Add new professor'"></h3>
+          <p class="text-xs text-muted mt-0.5" x-text="editing?.id ? 'Changes auto-log to activity.' : 'Fill in the basics; everything else is optional.'"></p>
+        </div>
+        <button @click="editing=null" class="text-muted hover:text-ink text-xl leading-none">×</button>
+      </div>
+      <template x-if="editing">
+        <div class="grid grid-cols-2 gap-4">
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Name</span>
+            <input type="text" x-model="editing.name" placeholder="Prof. Name" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label><span class="text-xs text-muted font-medium">University</span>
+            <input type="text" x-model="editing.university" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label><span class="text-xs text-muted font-medium">Department / Lab</span>
+            <input type="text" x-model="editing.dept_lab" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label><span class="text-xs text-muted font-medium">Tier</span>
+            <select x-model="editing.tier" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm">
+              <option value="T1">T1 — Direct overlap</option>
+              <option value="T2">T2 — Strong match</option>
+              <option value="T3">T3 — Good match</option>
+            </select></label>
+          <label><span class="text-xs text-muted font-medium">Status</span>
+            <select x-model="editing.status" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm">
+              <template x-for="s in statusKeys" :key="s"><option :value="s" x-text="statusEmoji(s)+' '+statusName(s)"></option></template>
+            </select></label>
+          <label><span class="text-xs text-muted font-medium">Date sent</span>
+            <input type="date" x-model="editing.date_sent" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+          <label><span class="text-xs text-muted font-medium">Email</span>
+            <input type="email" x-model="editing.email" placeholder="prof@university.ca" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Research category</span>
+            <select x-model="editing.research_category" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm">
+              <option value="">— uncategorized —</option>
+              <template x-for="c in categoryKeys" :key="c"><option :value="c" x-text="categoryLabel(c)"></option></template>
+            </select></label>
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Research angle</span>
+            <input type="text" x-model="editing.research_angle" placeholder="How your work connects to theirs" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label class="col-span-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-muted font-medium">Profile / Lab URL</span>
+              <a x-show="editing.profile_url" :href="editing.profile_url" target="_blank" rel="noopener" class="text-xs text-brand-500 hover:text-brand-700">Open →</a>
+            </div>
+            <input type="url" x-model="editing.profile_url" placeholder="https://..." class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none font-mono"/></label>
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Notes</span>
+            <textarea x-model="editing.notes" rows="4" placeholder="Anything worth remembering: shared papers, mutual contacts, follow-up ideas..." class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"></textarea></label>
+        </div>
+      </template>
+      <div class="flex items-center justify-between pt-5 mt-5 border-t border-line">
+        <button x-show="editing?.id" @click="openDraftForProfessor(editing)" class="px-3 py-1.5 rounded-md text-brand-700 bg-brand-50 hover:bg-brand-100 text-sm font-medium flex items-center gap-1.5">✉️ Compose email</button>
+        <div class="flex gap-2 ml-auto">
+          <button @click="editing=null" class="px-3 py-1.5 rounded-md text-muted hover:text-ink text-sm">Cancel</button>
+          <button @click="save()" class="px-4 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Draft editor modal -->
+  <div x-show="editingDraft" x-transition.opacity class="fixed inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4" @click.self="editingDraft=null" @keydown.escape.window="editingDraft=null" style="display:none">
+    <div class="bg-white border border-line rounded-xl w-full max-w-3xl shadow-soft max-h-[92vh] flex flex-col" x-show="editingDraft">
+      <div class="flex items-start justify-between gap-4 p-5 border-b border-line">
+        <div class="min-w-0 flex-1">
+          <h3 class="text-lg font-semibold truncate" x-text="'Draft for '+(editingDraft?.professor_name||'')"></h3>
+          <p class="text-xs text-muted mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span x-text="editingDraft?.professor_university"></span>
+            <span x-show="editingDraft?.professor_email" class="font-mono text-brand-700" x-text="editingDraft?.professor_email"></span>
+            <span x-show="editingDraft?.professor_status" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px]" :class="statusPill(editingDraft?.professor_status)">
+              <span x-text="statusEmoji(editingDraft?.professor_status)"></span><span x-text="statusName(editingDraft?.professor_status)"></span>
+            </span>
+          </p>
+        </div>
+        <div class="flex items-center gap-3 flex-shrink-0">
+          <span class="text-xs text-muted italic" x-text="saveState"></span>
+          <button @click="editingDraft=null" class="text-muted hover:text-ink text-xl leading-none">×</button>
+        </div>
+      </div>
+
+      <template x-if="editingDraft">
+        <div class="flex-1 overflow-y-auto p-5 space-y-3">
+          <label class="block">
+            <span class="text-xs text-muted font-medium">Subject</span>
+            <input type="text" x-model="editingDraft.subject" @input="scheduleDraftSave()" placeholder="Postdoc inquiry — [your one-liner hook]"
+              class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/>
+          </label>
+          <label class="block">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-muted font-medium">Body</span>
+              <span class="text-[11px] text-muted" x-text="(editingDraft.body||'').split(/\s+/).filter(Boolean).length + ' words · ' + (editingDraft.body||'').length + ' chars'"></span>
+            </div>
+            <textarea x-model="editingDraft.body" @input="scheduleDraftSave()" rows="16" spellcheck="true"
+              class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm leading-relaxed font-sans focus:border-brand-500 focus:bg-white outline-none resize-y"></textarea>
+          </label>
+          <details class="text-xs text-muted">
+            <summary class="cursor-pointer hover:text-ink">Writing tips for postdoc outreach</summary>
+            <ul class="mt-2 space-y-1 pl-4 list-disc">
+              <li>Subject line: concrete, not generic ("Postdoc inquiry" alone gets skipped)</li>
+              <li>Open with one sentence placing yourself; don't bury the ask</li>
+              <li>Cite one specific paper of theirs and how it connects to your work</li>
+              <li>Papers under review should be framed as "currently under review at [venue]"</li>
+              <li>The Montreal driving dataset is internal — describe as "large-scale, not yet public"</li>
+              <li>Close with a low-commitment ask (15 min call, feedback on a one-pager, etc.)</li>
+            </ul>
+          </details>
+        </div>
+      </template>
+
+      <div class="flex items-center justify-between gap-2 p-4 border-t border-line bg-paper/60">
+        <button @click="deleteDraft()" class="px-3 py-1.5 rounded-md text-rose-600 hover:bg-rose-50 text-sm">Delete draft</button>
+        <div class="flex items-center gap-2">
+          <button @click="copyDraft()" class="px-3 py-1.5 rounded-md border border-line hover:bg-white text-sm">📋 Copy</button>
+          <a :href="mailtoLink(editingDraft)" class="px-3 py-1.5 rounded-md border border-line hover:bg-white text-sm" title="Opens in default mail client">📨 Open in mail</a>
+          <button @click="saveDraft()" class="px-3 py-1.5 rounded-md border border-brand-200 text-brand-700 bg-brand-50 hover:bg-brand-100 text-sm font-medium">Save</button>
+          <button @click="markDraftSent()" class="px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow-card">Mark as sent</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fellowship modal -->
+  <div x-show="editingFellowship" x-transition.opacity class="fixed inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4" @click.self="editingFellowship=null" @keydown.escape.window="editingFellowship=null" style="display:none">
+    <div class="bg-white border border-line rounded-xl w-full max-w-xl p-6 shadow-soft" x-show="editingFellowship">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="text-lg font-semibold" x-text="editingFellowship?.id ? 'Edit fellowship' : 'Add fellowship'"></h3>
+        <button @click="editingFellowship=null" class="text-muted hover:text-ink text-xl leading-none">×</button>
+      </div>
+      <template x-if="editingFellowship">
+        <div class="grid grid-cols-2 gap-4">
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Name</span>
+            <input type="text" x-model="editingFellowship.name" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+          <label><span class="text-xs text-muted font-medium">Deadline</span>
+            <input type="text" x-model="editingFellowship.deadline" placeholder="Oct 2026 / Rolling / TBD" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+          <label><span class="text-xs text-muted font-medium">Amount</span>
+            <input type="text" x-model="editingFellowship.amount" placeholder="~$70K CAD/yr" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Eligibility</span>
+            <input type="text" x-model="editingFellowship.eligibility" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+          <label><span class="text-xs text-muted font-medium">Status</span>
+            <select x-model="editingFellowship.status" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm">
+              <option>pending</option><option>applied</option><option>awarded</option><option>rejected</option><option>ineligible</option></select></label>
+          <label><span class="text-xs text-muted font-medium">URL</span>
+            <input type="text" x-model="editingFellowship.url" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+          <label class="col-span-2"><span class="text-xs text-muted font-medium">Notes</span>
+            <textarea x-model="editingFellowship.notes" rows="3" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"></textarea></label>
+        </div>
+      </template>
+      <div class="flex items-center justify-between pt-5 mt-5 border-t border-line">
+        <button x-show="editingFellowship?.id" @click="delFellowship()" class="px-3 py-1.5 rounded-md text-rose-600 hover:bg-rose-50 text-sm">Delete</button>
+        <div class="flex gap-2 ml-auto">
+          <button @click="editingFellowship=null" class="px-3 py-1.5 rounded-md text-muted hover:text-ink text-sm">Cancel</button>
+          <button @click="saveFellowship()" class="px-4 py-1.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium shadow-card">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
