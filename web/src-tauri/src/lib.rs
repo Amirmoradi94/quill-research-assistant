@@ -61,5 +61,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running Postdoc Dashboard");
+        .expect("error while running Quill Research Assistant");
 }

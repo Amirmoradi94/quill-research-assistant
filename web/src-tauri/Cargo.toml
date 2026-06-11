@@ -1,12 +1,12 @@
 [package]
-name = "postdoc-dashboard"
+name = "quill-research-assistant"
 version = "0.1.0"
-description = "Local desktop shell for Postdoc Dashboard"
-authors = ["Postdoc Dashboard"]
+description = "Local desktop shell for Quill Research Assistant"
+authors = ["Quill Research Assistant"]
 edition = "2021"
 
 [lib]
-name = "postdoc_dashboard_lib"
+name = "quill_research_assistant_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

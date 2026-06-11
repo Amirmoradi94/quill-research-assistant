@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Postdoc Dashboard</title>
+  <title>Quill Research Assistant</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
   <link rel="stylesheet" href="/static/styles.css" />
@@ -38,8 +38,8 @@
       <div class="flex items-center gap-2">
         <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white text-sm">AM</div>
         <div>
-          <h1 class="text-base font-semibold leading-tight">Postdoc Dashboard</h1>
-          <p class="text-xs text-muted leading-tight">Tracking Amir's applications</p>
+          <h1 class="text-base font-semibold leading-tight">Quill Research Assistant</h1>
+          <p class="text-xs text-muted leading-tight">Tracking research-position applications</p>
         </div>
       </div>
       <nav class="flex gap-1 ml-2">
@@ -69,7 +69,7 @@
     <section x-show="view==='overview'" x-transition class="space-y-7">
       <div>
         <h2 class="text-xl font-semibold">Good to see you back, Amir 👋</h2>
-        <p class="text-muted text-sm mt-1">Here's where your postdoc search stands today.</p>
+        <p class="text-muted text-sm mt-1">Here's where your research-position search stands today.</p>
       </div>
 
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -650,7 +650,7 @@
         <div class="flex-1 overflow-y-auto p-5 space-y-3">
           <label class="block">
             <span class="text-xs text-muted font-medium">Subject</span>
-            <input type="text" x-model="editingDraft.subject" @input="scheduleDraftSave()" placeholder="Postdoc inquiry — [your one-liner hook]"
+            <input type="text" x-model="editingDraft.subject" @input="scheduleDraftSave()" placeholder="Research position inquiry — [your one-liner hook]"
               class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/>
           </label>
           <label class="block">
@@ -662,9 +662,9 @@
               class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm leading-relaxed font-sans focus:border-brand-500 focus:bg-white outline-none resize-y"></textarea>
           </label>
           <details class="text-xs text-muted">
-            <summary class="cursor-pointer hover:text-ink">Writing tips for postdoc outreach</summary>
+            <summary class="cursor-pointer hover:text-ink">Writing tips for research-position outreach</summary>
             <ul class="mt-2 space-y-1 pl-4 list-disc">
-              <li>Subject line: concrete, not generic ("Postdoc inquiry" alone gets skipped)</li>
+              <li>Subject line: concrete, not generic ("Research position inquiry" alone gets skipped)</li>
               <li>Open with one sentence placing yourself; don't bury the ask</li>
               <li>Cite one specific paper of theirs and how it connects to your work</li>
               <li>Papers under review should be framed as "currently under review at [venue]"</li>

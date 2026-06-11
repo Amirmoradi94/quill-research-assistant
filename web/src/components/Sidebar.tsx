@@ -58,7 +58,7 @@ export function Sidebar({ user }: { user: { name: string; email: string | null }
             .join('')}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[15px] truncate">Postdoc Dashboard</div>
+          <div className="font-semibold text-[15px] truncate">Quill Research Assistant</div>
           <div className="text-[12px] truncate" style={{ color: 'var(--color-muted)' }}>
             {user.email || 'self-hosted'}
           </div>

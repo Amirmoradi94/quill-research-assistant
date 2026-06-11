@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Postdoc Dashboard",
+  "productName": "Quill Research Assistant",
   "version": "0.1.0",
-  "identifier": "local.postdoc.dashboard",
+  "identifier": "local.quill.researchassistant",
   "build": {
     "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "VITE_API_BASE=http://127.0.0.1:8000 npm run bundle",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Postdoc Dashboard",
+        "title": "Quill Research Assistant",
         "width": 1440,
         "height": 940,
         "minWidth": 1100,

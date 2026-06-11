@@ -6,7 +6,8 @@ import platform
 from pathlib import Path
 
 
-APP_NAME = "PostdocDashboard"
+APP_NAME = "QuillResearchAssistant"
+LEGACY_APP_NAME = "PostdocDashboard"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -21,11 +22,20 @@ def default_user_data_dir() -> Path:
 
     system = platform.system()
     if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / APP_NAME
+        base = Path.home() / "Library" / "Application Support"
+        path = base / APP_NAME
+        legacy = base / LEGACY_APP_NAME
+        return legacy if legacy.exists() and not path.exists() else path
     if system == "Windows":
         base = os.environ.get("APPDATA")
-        return Path(base or (Path.home() / "AppData" / "Roaming")) / APP_NAME
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
+        root = Path(base or (Path.home() / "AppData" / "Roaming"))
+        path = root / APP_NAME
+        legacy = root / LEGACY_APP_NAME
+        return legacy if legacy.exists() and not path.exists() else path
+    root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    path = root / APP_NAME
+    legacy = root / LEGACY_APP_NAME
+    return legacy if legacy.exists() and not path.exists() else path
 
 
 def data_dir() -> Path:

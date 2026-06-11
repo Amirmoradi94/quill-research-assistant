@@ -1,6 +1,7 @@
-# Postdoc Dashboard
+# Quill Research Assistant
 
-Postdoc Dashboard is a local-first desktop app for managing professor discovery,
+Quill Research Assistant is a local-first desktop app for graduate students and
+early-career researchers managing professor discovery, research-position
 outreach drafts, documents, grants, interviews, and follow-ups.
 
 It is designed to run on your own computer. Your database and uploaded documents
@@ -12,7 +13,7 @@ The intended install path is:
 
 1. Open the project **Releases** page on GitHub.
 2. Download the installer for your operating system.
-3. Open **Postdoc Dashboard**.
+3. Open **Quill Research Assistant**.
 4. Follow the in-app setup checklist.
 5. Choose Claude or Codex for Quill, the built-in research assistant.
 
@@ -24,7 +25,7 @@ requires developer setup.
 
 - Build and maintain your applicant profile.
 - Upload CVs, transcripts, papers, and cover letter templates.
-- Discover professor candidates with AI-assisted research.
+- Discover professor candidates for Master's, PhD, and postdoctoral research positions.
 - Track professor pipeline status from discovery to sent emails and replies.
 - Generate and review outreach drafts.
 - Track grants, calendar events, and interview prep.
@@ -83,9 +84,12 @@ dashboard/data
 
 Desktop mode stores data in the operating system app-data folder:
 
-- macOS: `~/Library/Application Support/PostdocDashboard`
-- Windows: `%APPDATA%/PostdocDashboard`
-- Linux: `$XDG_DATA_HOME/PostdocDashboard` or `~/.local/share/PostdocDashboard`
+- macOS: `~/Library/Application Support/QuillResearchAssistant`
+- Windows: `%APPDATA%/QuillResearchAssistant`
+- Linux: `$XDG_DATA_HOME/QuillResearchAssistant` or `~/.local/share/QuillResearchAssistant`
+
+Existing desktop installs that already have a `PostdocDashboard` data folder
+continue to use it for compatibility.
 
 ## Desktop Packaging Status
 

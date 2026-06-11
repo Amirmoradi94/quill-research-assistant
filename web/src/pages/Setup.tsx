@@ -140,9 +140,9 @@ export function Setup() {
         <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <div className="text-[13px] mb-1" style={{ color: 'var(--color-muted)' }}>Welcome / Setup</div>
-            <h1 className="max-w-full text-[28px] font-bold leading-tight tracking-tight md:text-[34px]">Set up Postdoc Dashboard</h1>
+            <h1 className="max-w-full text-[28px] font-bold leading-tight tracking-tight md:text-[34px]">Set up Quill Research Assistant</h1>
             <p className="mt-2 max-w-full text-[15px] leading-6" style={{ color: 'var(--color-ink-soft)' }}>
-              Complete these checks once. The app stores data on this computer and uses your installed Claude or Codex account for Quill.
+              Complete these checks once. The app helps graduate applicants find research positions and uses your installed Claude or Codex account for Quill.
             </p>
           </div>
           <button
