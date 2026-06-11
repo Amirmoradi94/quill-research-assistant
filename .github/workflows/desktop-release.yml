@@ -62,6 +62,10 @@ jobs:
         run: npm run desktop:build
         working-directory: web
 
+      - name: Repair and verify macOS DMG
+        if: runner.os == 'macOS'
+        run: scripts/fix_macos_release_package.sh
+
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:

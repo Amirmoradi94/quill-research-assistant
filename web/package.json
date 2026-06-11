@@ -8,11 +8,13 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "bundle": "vite build",
+    "build": "npm run typecheck && npm run bundle",
     "lint": "eslint .",
     "preview": "vite preview",
-    "desktop:dev": "npx @tauri-apps/cli@2 dev",
-    "desktop:build": "npx @tauri-apps/cli@2 build"
+    "desktop:dev": "npx --yes @tauri-apps/cli@2 dev",
+    "desktop:build": "npx --yes @tauri-apps/cli@2 build"
   },
   "dependencies": {
     "lucide-react": "^1.14.0",

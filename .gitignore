@@ -43,6 +43,7 @@ Thumbs.db
 *.tmp
 build-sidecar/
 dist-sidecar/
+release-artifacts/
 web/src-tauri/target/
 web/src-tauri/binaries/*
 !web/src-tauri/binaries/.gitkeep
