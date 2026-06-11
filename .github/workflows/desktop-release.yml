@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build-desktop:
     name: Build desktop app (${{ matrix.platform.name }})
@@ -71,3 +74,18 @@ jobs:
             web/src-tauri/target/release/bundle/**/*.AppImage
             web/src-tauri/target/release/bundle/**/*.deb
           if-no-files-found: warn
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Quill Research Assistant ${{ github.ref_name }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            web/src-tauri/target/release/bundle/**/*.dmg
+            web/src-tauri/target/release/bundle/**/*.msi
+            web/src-tauri/target/release/bundle/**/*.exe
+            web/src-tauri/target/release/bundle/**/*.AppImage
+            web/src-tauri/target/release/bundle/**/*.deb
