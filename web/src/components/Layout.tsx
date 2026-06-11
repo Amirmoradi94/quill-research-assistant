@@ -53,7 +53,7 @@ export function Layout() {
         <main className="overflow-y-auto min-h-0 min-w-0" style={{ background: 'var(--color-paper)' }}>
           <Outlet />
         </main>
-        <div className="hidden xl:block min-h-0 overflow-hidden">
+        <div className="hidden h-screen min-h-0 overflow-hidden xl:block">
           <QuillRail />
         </div>
       </div>

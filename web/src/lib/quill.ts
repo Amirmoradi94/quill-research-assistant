@@ -98,7 +98,12 @@ export type ProvidersStatus = {
 }
 
 export async function fetchProviders(): Promise<ProvidersStatus> {
-  const r = await fetch(apiUrl('/api/ai/providers'))
+  let r: Response
+  try {
+    r = await fetch(apiUrl('/api/ai/providers'))
+  } catch {
+    throw new Error('Local backend is not reachable on 127.0.0.1:8000')
+  }
   if (!r.ok) throw new Error(`providers ${r.status}`)
   return r.json()
 }

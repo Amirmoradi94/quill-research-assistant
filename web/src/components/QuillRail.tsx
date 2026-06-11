@@ -200,7 +200,7 @@ export function QuillRail() {
 
   return (
     <aside
-      className="flex h-full min-h-0 flex-col overflow-hidden border-l"
+      className="flex h-screen min-h-0 flex-col overflow-hidden border-l"
       style={{
         background: 'var(--color-paper)',
         borderColor: 'var(--color-line)',
@@ -269,7 +269,7 @@ export function QuillRail() {
         ))}
       </div>
 
-      <div className="shrink-0 px-3 pb-3 pt-3 border-t" style={{ background: 'color-mix(in srgb, var(--color-white) 92%, var(--color-paper))', borderColor: 'var(--color-line)' }}>
+      <div className="mt-auto shrink-0 px-3 pb-3 pt-3 border-t" style={{ background: 'color-mix(in srgb, var(--color-white) 92%, var(--color-paper))', borderColor: 'var(--color-line)' }}>
         <div className="mb-2 flex items-center gap-1.5 flex-wrap">
           {QUICK_PROMPTS.map(({ label, icon: Icon, text: prompt }) => (
             <button
@@ -383,9 +383,10 @@ function ProviderSelect({
   if (error) {
     return (
       <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
+        title={error}
         style={{ background: 'var(--color-rose-50)', color: 'var(--color-rose-700)', borderColor: 'var(--color-line)' }}>
         <AlertCircle size={10} />
-        provider error
+        backend offline
       </span>
     )
   }

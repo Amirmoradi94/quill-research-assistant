@@ -7,7 +7,14 @@
 # target triple suffix that Tauri expects, for example:
 #   web/src-tauri/binaries/postdoc-backend-aarch64-apple-darwin
 
+from pathlib import Path
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+
+ROOT = Path(SPECPATH).resolve()
+sys.path.insert(0, str(ROOT))
 
 
 hiddenimports = [
@@ -26,6 +33,7 @@ hiddenimports = [
 ]
 
 datas = [
+    ("app/static", "app/static"),
     ("ai/prompts", "ai/prompts"),
     *collect_data_files("fastapi"),
 ]
@@ -33,7 +41,7 @@ datas = [
 
 a = Analysis(
     ["desktop_backend.py"],
-    pathex=[],
+    pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
