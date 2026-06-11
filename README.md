@@ -1,56 +1,106 @@
-# Postdoc Application Dashboard
+# Postdoc Dashboard
 
-Self-hosted dashboard to track postdoc applications, fellowships, and activity.
-Auto-seeds from `../applications.md` on first run (77 professors, 4 fellowships).
+Postdoc Dashboard is a local-first desktop app for managing professor discovery,
+outreach drafts, documents, grants, interviews, and follow-ups.
 
-## Stack
-- **Backend**: FastAPI + SQLAlchemy + SQLite
-- **Frontend**: Static HTML + Tailwind (CDN) + Alpine.js (CDN)
-- **Persistence**: SQLite file at `./data/postdoc.db`
+It is designed to run on your own computer. Your database and uploaded documents
+stay local unless you choose to connect an AI provider.
 
-## Quick start
+## For Non-Technical Users
+
+The intended install path is:
+
+1. Open the project **Releases** page on GitHub.
+2. Download the installer for your operating system.
+3. Open **Postdoc Dashboard**.
+4. Follow the in-app setup checklist.
+5. Choose Claude or Codex for Quill, the built-in research assistant.
+
+Current status: the desktop app foundation is implemented, but public installers
+are not ready yet. Until the first release is published, this repository still
+requires developer setup.
+
+## What The App Helps With
+
+- Build and maintain your applicant profile.
+- Upload CVs, transcripts, papers, and cover letter templates.
+- Discover professor candidates with AI-assisted research.
+- Track professor pipeline status from discovery to sent emails and replies.
+- Generate and review outreach drafts.
+- Track grants, calendar events, and interview prep.
+- Use Quill with either Claude CLI or Codex CLI.
+
+## First-Run Setup Checklist
+
+When the desktop installer is ready, the app should guide you through:
+
+- Confirming where local data will be stored.
+- Detecting Claude CLI and Codex CLI.
+- Choosing the default Quill provider.
+- Testing the provider connection.
+- Uploading your CV.
+- Optionally connecting Gmail for sending drafts and checking replies.
+
+## Developer Setup
+
+Use this only if you are building or contributing to the app.
+
+Backend:
 
 ```bash
-cd dashboard
-docker compose up -d --build
-open http://localhost:8000
+scripts/start_backend_local.sh
 ```
 
-First run parses `../applications.md` and seeds the DB. On subsequent runs the DB is reused — edits made in the UI persist to `./data/postdoc.db`.
-
-## Re-seed from scratch
+Frontend:
 
 ```bash
-docker compose down
-rm -f data/postdoc.db
-docker compose up -d
+npm --prefix web run dev -- --host 0.0.0.0 --port 5173
 ```
 
-## Views
+Open:
 
-- **Overview** — KPIs, status breakdown, university breakdown, follow-up reminders (>14 days sent, no reply)
-- **Pipeline** — Kanban by status (drafting → sent → replied → interview → offer/rejected/no reply)
-- **Professors** — filterable/searchable table; click row to edit
-- **Fellowships** — card view for IVADO, NSERC, Banting, Concordia Horizon
-- **Activity** — append-only log of status transitions, creations, deletions
+```text
+http://localhost:5173
+```
 
-## API
-
-- `GET  /api/professors?tier=T1&status=sent&university=McGill&q=mila`
-- `POST /api/professors` — create
-- `PATCH /api/professors/{id}` — update (auto-logs status transitions)
-- `DELETE /api/professors/{id}`
-- `GET  /api/fellowships`, `POST/PATCH/DELETE` same pattern
-- `GET  /api/activity?limit=100`
-- `GET  /api/stats` — aggregates
-- `GET  /api/export` — full JSON dump
-- `GET  /api/health`
-
-## Local dev (without Docker)
+Desktop dev shell:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-POSTDOC_DB=./data/postdoc.db APPLICATIONS_MD=../applications.md \
-  uvicorn app.main:app --reload
+cd web
+npm run desktop:dev
 ```
+
+The desktop dev shell requires Rust/Cargo and Node 20-24. Node 25 is not
+recommended for this project.
+
+## Local Data
+
+Browser/developer mode stores data in:
+
+```text
+dashboard/data
+```
+
+Desktop mode stores data in the operating system app-data folder:
+
+- macOS: `~/Library/Application Support/PostdocDashboard`
+- Windows: `%APPDATA%/PostdocDashboard`
+- Linux: `$XDG_DATA_HOME/PostdocDashboard` or `~/.local/share/PostdocDashboard`
+
+## Desktop Packaging Status
+
+Implemented:
+
+- Tauri desktop shell scaffold.
+- Desktop-safe data paths.
+- Local FastAPI backend mode.
+- Claude/Codex provider detection.
+- Quill provider selector.
+- AI run recovery and retry support.
+
+Remaining before non-technical release:
+
+- Bundle the Python backend as a sidecar binary.
+- Add first-run setup wizard.
+- Build GitHub Release installers.
+- Add code signing/notarization for macOS and signing for Windows.

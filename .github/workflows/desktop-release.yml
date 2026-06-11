@@ -1,0 +1,73 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-desktop:
+    name: Build desktop app (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macOS Apple Silicon
+            os: macos-14
+          - name: macOS Intel
+            os: macos-13
+          - name: Windows
+            os: windows-latest
+          - name: Linux
+            os: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build backend sidecar
+        run: scripts/build_backend_sidecar.sh
+
+      - name: Build desktop package
+        run: npm run desktop:build
+        working-directory: web
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: postdoc-dashboard-${{ matrix.platform.os }}
+          path: |
+            web/src-tauri/target/release/bundle/**/*.dmg
+            web/src-tauri/target/release/bundle/**/*.app
+            web/src-tauri/target/release/bundle/**/*.msi
+            web/src-tauri/target/release/bundle/**/*.exe
+            web/src-tauri/target/release/bundle/**/*.AppImage
+            web/src-tauri/target/release/bundle/**/*.deb
+          if-no-files-found: warn

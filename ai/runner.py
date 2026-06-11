@@ -30,7 +30,11 @@ class Workflow(str, Enum):
     BOOTSTRAP_USER_PROFILE = "bootstrap_user_profile"
     RESEARCH_PROFESSOR     = "research_professor"
     EXTRACT_PROFILE        = "extract_profile"
+    EXTRACT_USER_PROFILE_FULL = "extract_user_profile_full"
     DRAFT_EMAIL            = "draft_email"
+    DRAFT_REPLY            = "draft_reply"
+    PREPARE_INTERVIEW      = "prepare_interview"
+    MOCK_INTERVIEW         = "mock_interview"
     FIND_GRANTS            = "find_grants"
     EDIT_CV                = "edit_cv"
     DRAFT_RESEARCH_STMT    = "draft_research_statement"
@@ -65,7 +69,7 @@ class RunRequest:
     grant_id: int | None = None
     cwd: str | None = None
     allowed_tools: list[str] | None = None
-    max_turns: int = 8
+    max_turns: int = 30
     timeout_s: int = 300
 
 
@@ -158,11 +162,11 @@ def render_prompt(workflow: Workflow, **vars: Any) -> str:
     template.
     """
     # Lazy-import jinja2 so import-time errors don't break the package.
-    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    from jinja2 import Environment, FileSystemLoader, Undefined
 
     env = Environment(
         loader=FileSystemLoader(_PROMPT_DIR),
-        undefined=StrictUndefined,
+        undefined=Undefined,
         autoescape=False,
         trim_blocks=True,
         lstrip_blocks=True,
@@ -274,11 +278,32 @@ def parse_claude_event(raw_line: str) -> StreamEvent | None:
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}\s*$")
 
 
+# House-style scrubber. Belt-and-suspenders: even when HOUSE_STYLE tells the
+# model not to use em-dashes, sometimes a token slips through. We strip them
+# from every text chunk before it reaches the client.
+def scrub_house_style(text: str) -> str:
+    if not text:
+        return text
+    # em-dash + zero-width space variants -> comma+space
+    text = text.replace("—", ", ")  # —
+    # en-dash inside spaced prose ("foo – bar") -> comma+space; bare ranges
+    # like "150–250" get a hyphen.
+    text = re.sub(r" – ", ", ", text)
+    text = text.replace("–", "-")   # –
+    # collapse any double commas/spaces the substitution might have produced
+    text = re.sub(r",\s*,", ",", text)
+    text = re.sub(r"  +", " ", text)
+    return text
+
+
 def extract_json_payload(full_text: str) -> dict[str, Any] | None:
     """Pull a trailing JSON object out of the assistant's free-text output."""
     if not full_text:
         return None
-    match = _JSON_BLOCK_RE.search(full_text.strip())
+    # Strip trailing code-fence chars/whitespace (the model sometimes emits
+    # 2 backticks instead of 3, defeating the \s*$ anchor below).
+    cleaned = full_text.strip().rstrip("` \n\r\t")
+    match = _JSON_BLOCK_RE.search(cleaned)
     if not match:
         return None
     try:
@@ -342,7 +367,8 @@ async def stream(
         if evt is None:
             continue
         if evt.kind == "text":
-            full_text_parts.append(evt.data.get("text", ""))
+            evt.data["text"] = scrub_house_style(evt.data.get("text", ""))
+            full_text_parts.append(evt.data["text"])
         yield evt
         if evt.kind == "done":
             payload = extract_json_payload("".join(full_text_parts))

@@ -40,11 +40,20 @@ async def spawn_cli(
 
     Raises `asyncio.TimeoutError` if total runtime exceeds `timeout_s`.
     """
+    # Strip RTK and other Claude Code hooks from the child process environment.
+    # The PreToolUse hook rewrites shell commands (curl → rtk curl) and filters
+    # output for token savings, which breaks Quill's ability to parse API JSON.
+    child_env = {**os.environ, **(env or {})}
+    child_env.pop("CLAUDE_CODE_HOOKS", None)
+    child_env["RTK_DISABLE"] = "1"
+    child_env["NO_RTK"] = "1"
+
     proc = await _create_proc(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, **(env or {})},
+        env=child_env,
+        limit=4 * 1024 * 1024,  # 4MB line buffer (default 64KB overflows on big tool-result lines)
     )
     assert proc.stdout is not None and proc.stderr is not None
 

@@ -2,7 +2,9 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DB_PATH = os.environ.get("POSTDOC_DB", "/app/data/postdoc.db")
+from .runtime import db_path
+
+DB_PATH = str(db_path())
 DB_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False})

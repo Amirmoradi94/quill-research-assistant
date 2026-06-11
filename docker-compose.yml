@@ -1,4 +1,11 @@
 services:
+  scraper:
+    build: ./scraper
+    image: postdoc-scraper:latest
+    container_name: postdoc-scraper
+    restart: unless-stopped
+    # No external port exposure — only reachable by dashboard on the internal network
+
   dashboard:
     build: .
     image: postdoc-dashboard:latest
@@ -12,3 +19,7 @@ services:
     environment:
       - POSTDOC_DB=/app/data/postdoc.db
       - APPLICATIONS_MD=/app/seed/applications.md
+      - SCRAPER_URL=http://scraper:8001
+    depends_on:
+      scraper:
+        condition: service_healthy

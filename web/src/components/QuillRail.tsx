@@ -1,9 +1,11 @@
 import {
-  Sparkles, History, X, Paperclip, ArrowUp, Square,
-  CheckCircle2, Loader, AlertCircle,
+  History, Paperclip, ArrowUp, Square,
+  CheckCircle2, Loader, AlertCircle, ChevronDown, ChevronRight,
+  Bot, CircleDot, Database, FileText, Mail, WandSparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { runQuill, type QuillEvent } from '@/lib/quill'
+import ReactMarkdown from 'react-markdown'
+import { fetchProviders, runQuill, type ProvidersStatus, type QuillEvent } from '@/lib/quill'
 
 type Role = 'user' | 'assistant'
 
@@ -28,29 +30,88 @@ type ToolCall = {
   result?: any
 }
 
-const SUGGESTIONS = [
-  'Find new profs',
-  "This week's stats",
-  'What should I do today?',
-] as const
+type QuillProvider = 'claude_cli' | 'codex_cli'
+
+const BOOT_MSG: Message = {
+  id: 'boot',
+  role: 'assistant',
+  text: 'Hi. I can inspect this dashboard, run research workflows, update local data, and help draft outreach. Ask a focused question or pick a prompt below.',
+  done: true,
+  meta: { ts: Date.now() },
+}
+
+const QUICK_PROMPTS = [
+  { label: 'Review drafts', icon: Mail, text: 'Review the current draft queue and tell me which outreach emails need attention first.' },
+  { label: 'Find gaps', icon: Database, text: 'Scan the dashboard data and summarize the biggest gaps in my application pipeline.' },
+  { label: 'Improve profile', icon: FileText, text: 'Review my profile signals and suggest concrete improvements for professor matching.' },
+]
+
+function loadMessages(): Message[] {
+  try {
+    const raw = localStorage.getItem('quill-history')
+    if (raw) {
+      const parsed = JSON.parse(raw) as Message[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch {}
+  return [BOOT_MSG]
+}
+
+function saveMessages(msgs: Message[]) {
+  try {
+    // Keep last 100 messages; skip incomplete assistant messages from prev sessions
+    const clean = msgs.map((m) =>
+      m.role === 'assistant' && !m.done ? { ...m, done: true } : m
+    ).slice(-100)
+    localStorage.setItem('quill-history', JSON.stringify(clean))
+  } catch {}
+}
+
+function loadProvider(): QuillProvider {
+  try {
+    const saved = localStorage.getItem('quill-provider')
+    if (saved === 'codex_cli' || saved === 'claude_cli') return saved
+  } catch {}
+  return 'claude_cli'
+}
 
 export function QuillRail() {
   const [text, setText] = useState('')
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'boot',
-      role: 'assistant',
-      text:
-        'Hi. The Quill backend is live — Claude or Codex runs on your machine, ' +
-        'the dashboard streams the output here. Try saying hi or asking a quick question.',
-      done: true,
-      meta: { ts: Date.now() },
-    },
-  ])
+  const [messages, setMessages] = useState<Message[]>(loadMessages)
   const [running, setRunning] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [providers, setProviders] = useState<ProvidersStatus | null>(null)
+  const [providerError, setProviderError] = useState<string | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<QuillProvider>(loadProvider)
   const abortRef = useRef<AbortController | null>(null)
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+
+  // Persist history to localStorage whenever messages change.
+  useEffect(() => { saveMessages(messages) }, [messages])
+
+  useEffect(() => {
+    fetchProviders()
+      .then((status) => {
+        setProviders(status)
+        setProviderError(null)
+        const claudeReady = status.claude_cli.available
+        const codexReady = status.codex_cli.available
+        setSelectedProvider((current) => {
+          if (current === 'claude_cli' && claudeReady) return current
+          if (current === 'codex_cli' && codexReady) return current
+          if (claudeReady) return 'claude_cli'
+          if (codexReady) return 'codex_cli'
+          return current
+        })
+      })
+      .catch((e) => setProviderError(e?.message || String(e)))
+  }, [])
+
+  useEffect(() => {
+    try { localStorage.setItem('quill-provider', selectedProvider) } catch {}
+  }, [selectedProvider])
 
   // Auto-scroll to bottom when content grows.
   useEffect(() => {
@@ -85,10 +146,26 @@ export function QuillRail() {
     const controller = new AbortController()
     abortRef.current = controller
     setRunning(true)
+    setElapsed(0)
+    elapsedRef.current = setInterval(() => setElapsed((s) => s + 1), 1000)
+
+    // Build conversation history for the LLM: prior user + assistant messages
+    // in order, excluding the boot greeting and the freshly-added empty AI
+    // message. Cap at the most recent 12 turns to keep prompt cost bounded.
+    const priorHistory = messages
+      .filter((m) => m.id !== 'boot' && m.done && m.text.trim().length > 0)
+      .slice(-12)
+      .map((m) => ({ role: m.role, content: m.text }))
 
     try {
       for await (const evt of runQuill(
-        { workflow: 'chat', params: { message: msg }, max_turns: 1, timeout_s: 60 },
+        {
+          workflow: 'chat',
+          params: { message: msg, history: priorHistory },
+          preferred_provider: selectedProvider,
+          max_turns: 30,
+          timeout_s: 120,
+        },
         { signal: controller.signal }
       )) {
         applyEvent(aiId, evt, setMessages)
@@ -102,6 +179,9 @@ export function QuillRail() {
     } finally {
       setRunning(false)
       abortRef.current = null
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null }
+      // Signal all pages to refresh their data in case Quill modified the DB.
+      window.dispatchEvent(new CustomEvent('quill:data-changed'))
     }
   }
 
@@ -120,59 +200,99 @@ export function QuillRail() {
 
   return (
     <aside
-      className="flex flex-col border-l"
-      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}
+      className="flex h-full min-h-0 flex-col overflow-hidden border-l"
+      style={{
+        background: 'var(--color-paper)',
+        borderColor: 'var(--color-line)',
+        backgroundImage:
+          'linear-gradient(rgba(28,34,48,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(28,34,48,0.045) 1px, transparent 1px)',
+        backgroundSize: '22px 22px',
+      }}
     >
       <header
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--color-line)' }}
+        className="shrink-0 px-4 py-3 border-b"
+        style={{ borderColor: 'var(--color-line)', background: 'color-mix(in srgb, var(--color-white) 92%, var(--color-paper))' }}
       >
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} style={{ color: 'var(--color-amber-600)' }} />
-          <span className="font-semibold text-[14px]">Quill</span>
-          <StatusPill running={running} />
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="grid size-7 place-items-center rounded-md border"
+                style={{ background: 'var(--color-ink)', color: 'white', borderColor: 'var(--color-ink)' }}>
+                <Bot size={15} />
+              </span>
+              <div className="min-w-0">
+                <div className="font-bold text-[14px] leading-tight" style={{ color: 'var(--color-ink)' }}>
+                  Quill
+                </div>
+                <div className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
+                  Research assistant
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {running && (
+              <button
+                onClick={stop}
+                className="px-2 py-1 rounded-md text-[11px] font-medium flex items-center gap-1"
+                style={{ background: 'var(--color-rose-50)', color: 'var(--color-rose-700)', border: '1px solid var(--color-line-strong)' }}
+                title="Stop generation"
+              >
+                <Square size={9} fill="currentColor" /> Stop
+              </button>
+            )}
+            <button
+              className="p-1.5 rounded-md border transition-colors hover:bg-[color:var(--color-paper-2)]"
+              title="Clear history"
+              onClick={() => { setMessages([BOOT_MSG]); localStorage.removeItem('quill-history') }}
+              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-muted)' }}
+            >
+              <History size={14} />
+            </button>
+          </div>
         </div>
-        <div className="flex gap-1">
-          <button className="p-1.5 rounded transition-colors hover:bg-[color:var(--color-paper-2)]" title="History">
-            <History size={14} style={{ color: 'var(--color-muted)' }} />
-          </button>
-          <button className="p-1.5 rounded transition-colors hover:bg-[color:var(--color-paper-2)]" title="Close">
-            <X size={14} style={{ color: 'var(--color-muted)' }} />
-          </button>
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          <StatusPill running={running} elapsed={elapsed} />
+          <ProviderSelect
+            providers={providers}
+            error={providerError}
+            selected={selectedProvider}
+            onSelect={setSelectedProvider}
+            disabled={running}
+          />
         </div>
       </header>
 
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3 text-[14px] flex flex-col gap-3">
+      <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3 text-[15px]">
         {messages.map((m) => (
           <MessageView key={m.id} msg={m} />
         ))}
       </div>
 
-      <div className="px-4 py-2 flex flex-wrap gap-1.5">
-        {SUGGESTIONS.map((p) => (
-          <button
-            key={p}
-            className="px-2.5 py-1 text-[11px] rounded-full border transition-colors hover:bg-[color:var(--color-white)]"
-            style={{
-              background: 'var(--color-paper-2)',
-              borderColor: 'var(--color-line)',
-              color: 'var(--color-ink-soft)',
-            }}
-            onClick={() => {
-              setText(p)
-              taRef.current?.focus()
-            }}
-          >
-            {p}
-          </button>
-        ))}
-      </div>
-
-      <div className="px-4 pb-4 pt-3 border-t" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
+      <div className="shrink-0 px-3 pb-3 pt-3 border-t" style={{ background: 'color-mix(in srgb, var(--color-white) 92%, var(--color-paper))', borderColor: 'var(--color-line)' }}>
+        <div className="mb-2 flex items-center gap-1.5 flex-wrap">
+          {QUICK_PROMPTS.map(({ label, icon: Icon, text: prompt }) => (
+            <button
+              key={label}
+              onClick={() => {
+                if (!running) {
+                  setText(prompt)
+                  taRef.current?.focus()
+                }
+              }}
+              disabled={running}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium disabled:opacity-50"
+              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
+            >
+              <Icon size={11} />
+              {label}
+            </button>
+          ))}
+        </div>
         <div
-          className="quill-composer relative rounded-xl border px-4 pt-3.5 pb-12 transition-all"
+          className="quill-composer relative rounded-md border px-3 pt-3 pb-11 transition-all"
           style={{
-            background: 'var(--color-paper)',
+            background: 'var(--color-white)',
             borderColor: 'var(--color-line-strong)',
             boxShadow: '0 1px 2px rgba(17,24,39,0.04)',
           }}
@@ -185,28 +305,24 @@ export function QuillRail() {
             placeholder="Ask Quill anything…"
             rows={1}
             disabled={running}
-            className="w-full bg-transparent border-0 outline-none resize-none text-[14px] leading-[1.6] placeholder:text-[color:var(--color-muted-2)]"
-            style={{ color: 'var(--color-ink)', minHeight: 56, maxHeight: 220 }}
+            className="w-full bg-transparent border-0 outline-none resize-none text-[14px] leading-[1.55] placeholder:text-[color:var(--color-muted-2)]"
+            style={{ color: 'var(--color-ink)', minHeight: 58, maxHeight: 220 }}
           />
 
           {/* Bottom toolbar inside the shell */}
-          <div className="absolute left-3 right-3 bottom-2.5 flex items-center justify-between">
-            <div className="flex items-center gap-1">
-              <button
-                className="p-1.5 rounded-md transition-colors hover:bg-[color:var(--color-paper-2)]"
-                title="Attach"
-              >
-                <Paperclip size={15} style={{ color: 'var(--color-muted)' }} />
-              </button>
-              <span className="text-[10.5px] ml-1" style={{ color: 'var(--color-muted-2)' }}>
-                <kbd style={kbdStyle}>Enter</kbd>&nbsp;send
-                <span className="mx-1.5" style={{ opacity: 0.5 }}>·</span>
-                <kbd style={kbdStyle}>Shift</kbd>&nbsp;<kbd style={kbdStyle}>Enter</kbd>&nbsp;newline
-              </span>
-            </div>
+          <div className="absolute left-3 right-3 bottom-2.5 flex items-center justify-between gap-2">
+            <button
+              className="p-1.5 rounded-md transition-colors hover:bg-[color:var(--color-paper-2)] flex-shrink-0"
+              title="Attach"
+            >
+              <Paperclip size={15} style={{ color: 'var(--color-muted)' }} />
+            </button>
+            <span className="text-[10px] mr-auto" style={{ color: 'var(--color-muted)' }}>
+              Enter to send
+            </span>
             {running ? (
               <button
-                className="quill-send px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95"
+                className="quill-send flex-shrink-0 px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95"
                 style={{ background: 'var(--color-ink)' }}
                 onClick={stop}
                 title="Stop"
@@ -216,8 +332,8 @@ export function QuillRail() {
               </button>
             ) : (
               <button
-                className="quill-send px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ background: 'var(--color-brand-500)' }}
+                className="quill-send flex-shrink-0 px-3 py-1.5 rounded-md text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: 'var(--color-ink)' }}
                 disabled={!text.trim()}
                 onClick={send}
                 title="Send (Enter)"
@@ -234,28 +350,86 @@ export function QuillRail() {
 }
 
 // ─────────── Helpers ───────────
-const kbdStyle: React.CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: 10,
-  background: 'var(--color-paper-2)',
-  border: '1px solid var(--color-line)',
-  padding: '1px 5px',
-  borderRadius: 3,
-  color: 'var(--color-ink-soft)',
-}
-
-function StatusPill({ running }: { running: boolean }) {
+function StatusPill({ running, elapsed }: { running: boolean; elapsed: number }) {
+  const slow = running && elapsed > 30
   return (
     <span
-      className="rounded-full px-1.5 py-0.5 text-[10px] font-mono inline-flex items-center gap-1"
+      className="rounded-full border px-2 py-0.5 text-[11px] font-mono inline-flex items-center gap-1"
       style={{
-        background: running ? 'var(--color-amber-50)' : 'var(--color-paper-2)',
-        color: running ? 'var(--color-amber-700)' : 'var(--color-muted)',
+        background: slow ? 'var(--color-rose-50)' : running ? 'var(--color-amber-50)' : 'var(--color-paper-2)',
+        color: slow ? 'var(--color-rose-700)' : running ? 'var(--color-amber-700)' : 'var(--color-muted)',
+        borderColor: 'var(--color-line)',
       }}
     >
       {running && <Loader size={9} className="animate-spin" />}
-      {running ? 'streaming' : 'idle'}
+      {running ? `${elapsed}s` : 'idle'}
     </span>
+  )
+}
+
+function ProviderSelect({
+  providers,
+  error,
+  selected,
+  onSelect,
+  disabled,
+}: {
+  providers: ProvidersStatus | null
+  error: string | null
+  selected: QuillProvider
+  onSelect: (provider: QuillProvider) => void
+  disabled: boolean
+}) {
+  if (error) {
+    return (
+      <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
+        style={{ background: 'var(--color-rose-50)', color: 'var(--color-rose-700)', borderColor: 'var(--color-line)' }}>
+        <AlertCircle size={10} />
+        provider error
+      </span>
+    )
+  }
+  if (!providers) {
+    return (
+      <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
+        style={{ background: 'var(--color-paper)', color: 'var(--color-muted)', borderColor: 'var(--color-line)' }}>
+        <Loader size={10} className="animate-spin" />
+        provider
+      </span>
+    )
+  }
+  const options: { value: QuillProvider; label: string; available: boolean }[] = [
+    { value: 'claude_cli', label: 'Claude', available: providers.claude_cli.available },
+    { value: 'codex_cli', label: 'Codex', available: providers.codex_cli.available },
+  ]
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-full border p-0.5"
+      style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}
+      aria-label="Quill provider"
+    >
+      {options.map((option) => {
+        const active = selected === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled || !option.available}
+            onClick={() => onSelect(option.value)}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            style={{
+              background: active ? 'var(--color-white)' : 'transparent',
+              color: active ? 'var(--color-green-700)' : 'var(--color-muted)',
+              boxShadow: active ? '0 1px 2px rgba(17,24,39,0.08)' : 'none',
+            }}
+            title={option.available ? `Use ${option.label} for Quill` : `${option.label} CLI not detected`}
+          >
+            <CircleDot size={10} />
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -263,8 +437,8 @@ function MessageView({ msg }: { msg: Message }) {
   if (msg.role === 'user') {
     return (
       <div
-        className="self-end max-w-[90%] rounded-md px-3 py-2 text-[14px] leading-relaxed animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both]"
-        style={{ background: 'var(--color-brand-50)', color: 'var(--color-brand-700)' }}
+        className="self-end max-w-[88%] rounded-md border px-3 py-2 text-[14px] leading-relaxed animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both]"
+        style={{ background: 'var(--color-ink)', color: 'white', borderColor: 'var(--color-ink)' }}
       >
         {msg.text}
       </div>
@@ -272,72 +446,121 @@ function MessageView({ msg }: { msg: Message }) {
   }
 
   return (
-    <div className="animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both]">
-      <div
-        className="text-[11px] font-mono mb-1.5"
-        style={{ color: 'var(--color-muted)' }}
-      >
-        Quill {msg.meta?.provider && `· via ${msg.meta.provider}`}
-        {msg.meta?.cost !== undefined && ` · $${msg.meta.cost.toFixed(4)}`}
-        {msg.meta?.durationMs !== undefined && ` · ${(msg.meta.durationMs / 1000).toFixed(1)}s`}
+    <div className="animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both] rounded-md border px-3 py-2.5"
+      style={{ background: 'color-mix(in srgb, var(--color-white) 94%, var(--color-paper))', borderColor: 'var(--color-line)' }}>
+      <div className="flex items-center gap-1.5 text-[11px] font-mono mb-1.5" style={{ color: 'var(--color-muted)' }}>
+        <WandSparkles size={11} style={{ color: 'var(--color-amber-600)' }} />
+        <span>Quill</span>
+        {msg.meta?.provider && <span>via {msg.meta.provider}</span>}
+        {msg.meta?.cost !== undefined && <span>${msg.meta.cost.toFixed(4)}</span>}
+        {msg.meta?.durationMs !== undefined && <span>{(msg.meta.durationMs / 1000).toFixed(1)}s</span>}
       </div>
 
       {msg.tools && msg.tools.length > 0 && (
-        <div className="flex flex-col gap-1 mb-2">
-          {msg.tools.map((t) => <ToolView key={t.id} tool={t} />)}
-        </div>
+        <ToolActivity tools={msg.tools} done={!!msg.done} />
       )}
 
       <div
-        className={`text-[14px] leading-[1.6] ${msg.done ? '' : 'q-cursor'}`}
-        style={{ color: 'var(--color-ink-soft)', whiteSpace: 'pre-wrap' }}
+        className={`quill-md text-[14px] leading-[1.58] ${msg.done ? '' : 'q-cursor'}`}
+        style={{ color: 'var(--color-ink-soft)' }}
       >
-        {msg.text}
+        <ReactMarkdown>{ensureParagraphs(msg.text)}</ReactMarkdown>
       </div>
 
       {msg.error && (
         <div
-          className="mt-2 px-3 py-2 rounded text-[12px] flex items-start gap-2"
+          className="mt-2 px-3 py-2 rounded text-[13px] flex items-start gap-2"
           style={{ background: 'var(--color-rose-50)', color: 'var(--color-rose-700)' }}
         >
           <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-          <span>{msg.error}</span>
+          <span style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{msg.error}</span>
         </div>
       )}
     </div>
   )
 }
 
-function ToolView({ tool }: { tool: ToolCall }) {
-  const Icon = tool.status === 'done' ? CheckCircle2 : tool.status === 'error' ? AlertCircle : Loader
+function ToolActivity({ tools, done }: { tools: ToolCall[]; done: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const running = tools.find((t) => t.status === 'running')
+  const latest = running ?? tools[tools.length - 1]
+  const errCount = tools.filter((t) => t.status === 'error').length
+  const total = tools.length
+
+  if (!done) {
+    // In-progress: single animated line showing the current tool
+    return (
+      <div className="mb-2 flex items-center gap-1.5 rounded border px-2 py-1.5 text-[11px] font-mono"
+        style={{ color: 'var(--color-amber-700)', background: 'var(--color-amber-50)', borderColor: 'var(--color-line)' }}>
+        <Loader size={11} className="animate-spin shrink-0" />
+        <span className="truncate" style={{ maxWidth: 280 }}>
+          {latest ? `${latest.name} ${toolArg(latest.input)}` : 'working…'}
+        </span>
+      </div>
+    )
+  }
+
+  // Completed: collapsed summary with optional expand
   return (
-    <div
-      className="rounded-sm border px-2 py-1 text-[11px] font-mono flex items-center gap-1.5"
-      style={{
-        background: 'var(--color-white)',
-        borderColor: 'var(--color-line)',
-        color:
-          tool.status === 'done'  ? 'var(--color-green-700)' :
-          tool.status === 'error' ? 'var(--color-rose-700)'  :
-                                    'var(--color-amber-700)',
-      }}
-    >
-      <Icon size={11} className={tool.status === 'running' ? 'animate-spin' : ''} />
-      <span className="font-medium" style={{ color: 'var(--color-ink)' }}>{tool.name}</span>
-      <span className="truncate" style={{ color: 'var(--color-brand-700)', maxWidth: 220 }}>
-        {tool.input ? renderToolArg(tool.input) : ''}
-      </span>
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-mono"
+        style={{
+          color: errCount ? 'var(--color-rose-700)' : 'var(--color-muted)',
+          borderColor: 'var(--color-line)',
+          background: errCount ? 'var(--color-rose-50)' : 'var(--color-paper)',
+        }}
+      >
+        {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        {errCount
+          ? `${total} steps · ${errCount} error${errCount > 1 ? 's' : ''}`
+          : `${total} step${total > 1 ? 's' : ''}`}
+      </button>
+      {expanded && (
+        <div className="mt-1.5 flex flex-col gap-0.5 pl-3 border-l"
+          style={{ borderColor: 'var(--color-line)' }}>
+          {tools.map((t) => (
+            <div key={t.id} className="flex items-center gap-1.5 text-[11px] font-mono truncate"
+              style={{
+                color: t.status === 'error' ? 'var(--color-rose-700)'
+                  : t.status === 'done' ? 'var(--color-muted)'
+                  : 'var(--color-amber-700)',
+              }}>
+              {t.status === 'done' ? <CheckCircle2 size={10} />
+                : t.status === 'error' ? <AlertCircle size={10} />
+                : <Loader size={10} className="animate-spin" />}
+              <span className="font-medium" style={{ color: 'var(--color-ink-soft)' }}>{t.name}</span>
+              <span className="truncate opacity-60">{toolArg(t.input)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function renderToolArg(input: any): string {
+// Insert double newlines between sentences that were concatenated without spacing.
+// Handles "Sentence one.Sentence two." → two paragraphs. Leaves existing markdown alone.
+function ensureParagraphs(text: string): string {
+  if (!text) return text
+  // Already has paragraph breaks — don't touch it.
+  if (text.includes('\n\n')) return text
+  // Single newlines: convert to paragraphs.
+  if (text.includes('\n')) return text.replace(/\n(?!\n)/g, '\n\n')
+  // No newlines at all: split on ". " followed by a capital letter.
+  return text.replace(/\.\s+(?=[A-Z])/g, '.\n\n')
+}
+
+function toolArg(input: any): string {
   if (!input) return ''
   if (typeof input === 'string') return input
+  if (input.command) return input.command
   if (input.file_path) return input.file_path
   if (input.url) return input.url
-  if (input.command) return input.command
-  return JSON.stringify(input).slice(0, 60)
+  if (input.pattern) return input.pattern
+  return JSON.stringify(input).slice(0, 80)
 }
 
 // ─────────── Event reducer ───────────
@@ -379,8 +602,11 @@ function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
               durationMs: evt.data.duration_ms,
             },
           }
-        case 'error':
-          return { ...m, done: true, error: evt.data.message }
+        case 'error': {
+          const stderr = (evt.data.stderr || '').trim()
+          const tail = stderr ? stderr.split('\n').slice(-3).join('\n') : ''
+          return { ...m, done: true, error: tail ? `${evt.data.message}\n${tail}` : evt.data.message }
+        }
       }
       return m
     })

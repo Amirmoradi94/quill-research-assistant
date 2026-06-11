@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Postdoc Dashboard",
+  "version": "0.1.0",
+  "identifier": "local.postdoc.dashboard",
+  "build": {
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "VITE_API_BASE=http://127.0.0.1:8000 npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Postdoc Dashboard",
+        "width": 1440,
+        "height": 940,
+        "minWidth": 1100,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "externalBin": [
+      "binaries/postdoc-backend"
+    ]
+  }
+}

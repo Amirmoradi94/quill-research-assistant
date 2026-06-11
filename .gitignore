@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-*/
 venv/
 __pycache__/
 *.pyc
@@ -20,6 +21,7 @@ node_modules/
 dist/
 .vite/
 *.local
+web/dist-bun-test/
 
 # Env / secrets
 .env
@@ -39,3 +41,11 @@ Thumbs.db
 # Build / logs
 *.log
 *.tmp
+build-sidecar/
+dist-sidecar/
+web/src-tauri/target/
+web/src-tauri/binaries/*
+!web/src-tauri/binaries/.gitkeep
+
+# Local app runtime data
+data/

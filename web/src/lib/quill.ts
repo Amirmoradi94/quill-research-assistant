@@ -1,4 +1,5 @@
 // Client for the Quill SSE endpoint.
+import { apiUrl } from './runtime'
 //
 // We can't use the browser's EventSource API because it's GET-only — our
 // endpoint is POST (so we can include workflow params in the body). Instead
@@ -17,6 +18,7 @@ export type QuillEvent =
 export type RunInput = {
   workflow: string
   params?: Record<string, any>
+  preferred_provider?: 'claude_cli' | 'codex_cli'
   professor_id?: number
   document_id?: number
   grant_id?: number
@@ -36,7 +38,7 @@ export async function* runQuill(
   input: RunInput,
   { signal }: { signal?: AbortSignal } = {}
 ): AsyncGenerator<QuillEvent> {
-  const r = await fetch('/api/ai/run', {
+  const r = await fetch(apiUrl('/api/ai/run'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
     body: JSON.stringify(input),
@@ -44,7 +46,7 @@ export async function* runQuill(
   })
   if (!r.ok) {
     const text = await r.text().catch(() => '')
-    throw new Error(`AI run failed: ${r.status} ${r.statusText} — ${text.slice(0, 200)}`)
+    throw new Error(`AI run failed: ${r.status} ${r.statusText}: ${text.slice(0, 200)}`)
   }
   if (!r.body) throw new Error('AI run: no response body')
 
@@ -96,7 +98,7 @@ export type ProvidersStatus = {
 }
 
 export async function fetchProviders(): Promise<ProvidersStatus> {
-  const r = await fetch('/api/ai/providers')
+  const r = await fetch(apiUrl('/api/ai/providers'))
   if (!r.ok) throw new Error(`providers ${r.status}`)
   return r.json()
 }

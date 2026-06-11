@@ -12,6 +12,11 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY app ./app
+COPY ai ./ai
+COPY alembic ./alembic
+COPY alembic.ini ./
+COPY web/dist ./app/static
+RUN test -f ./app/static/index.html
 
 RUN mkdir -p /app/data /app/seed
 
