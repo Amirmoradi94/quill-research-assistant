@@ -4,20 +4,23 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   FileUp,
   HardDrive,
   Loader2,
+  LogIn,
   RefreshCw,
   Settings,
   Sparkles,
   Terminal,
   User,
 } from 'lucide-react'
-import { api, type AiProvidersStatus, type DesktopStatus, type DocumentRow, type UserProfile } from '@/lib/api'
+import { api, type AiProvidersStatus, type DesktopStatus, type DocumentRow, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
 
 type LoadState = {
   desktop: DesktopStatus | null
   providers: AiProvidersStatus | null
+  setup: ProviderSetupStatus | null
   documents: DocumentRow[]
   profile: UserProfile | null
 }
@@ -25,6 +28,7 @@ type LoadState = {
 const initialState: LoadState = {
   desktop: null,
   providers: null,
+  setup: null,
   documents: [],
   profile: null,
 }
@@ -35,6 +39,8 @@ export function Setup() {
   const [savingProvider, setSavingProvider] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [setupBusy, setSetupBusy] = useState<string | null>(null)
+  const [setupMessage, setSetupMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [profileDraft, setProfileDraft] = useState({ name: '', email: '', role: '' })
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -43,9 +49,10 @@ export function Setup() {
   const load = async () => {
     setLoading(true)
     setError(null)
-    const [desktopResult, providersResult, docsResult, profileResult] = await Promise.allSettled([
+    const [desktopResult, providersResult, setupResult, docsResult, profileResult] = await Promise.allSettled([
       api.desktopStatus(),
       api.aiProviders(),
+      api.providerSetupStatus(),
       api.documents('cv'),
       api.profile(),
     ])
@@ -53,6 +60,7 @@ export function Setup() {
     const next = {
       desktop: desktopResult.status === 'fulfilled' ? desktopResult.value : null,
       providers: providersResult.status === 'fulfilled' ? providersResult.value : null,
+      setup: setupResult.status === 'fulfilled' ? setupResult.value : null,
       documents: docsResult.status === 'fulfilled' ? docsResult.value : [],
       profile: profileResult.status === 'fulfilled' ? profileResult.value : null,
     }
@@ -65,8 +73,16 @@ export function Setup() {
     })
     setLoading(false)
 
-    const firstError = [desktopResult, providersResult, docsResult, profileResult].find((r) => r.status === 'rejected')
-    if (firstError?.status === 'rejected') setError(firstError.reason instanceof Error ? firstError.reason.message : String(firstError.reason))
+    if (desktopResult.status === 'rejected') {
+      setError('Local backend is still starting or not reachable. Wait a few seconds, then click Recheck.')
+      return
+    }
+    const failed: string[] = []
+    if (providersResult.status === 'rejected') failed.push('provider status')
+    if (setupResult.status === 'rejected') failed.push('Claude/Codex setup status')
+    if (docsResult.status === 'rejected') failed.push('CV documents')
+    if (profileResult.status === 'rejected') failed.push('profile')
+    if (failed.length) setError(`Could not load ${failed.join(', ')}. Click Recheck after the app finishes starting.`)
   }
 
   useEffect(() => { void load() }, [])
@@ -90,6 +106,29 @@ export function Setup() {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSavingProvider(null)
+    }
+  }
+
+  const runProviderSetup = async (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') => {
+    const item = state.setup?.providers[provider]
+    const label = item?.label || (provider === 'claude_cli' ? 'Claude Code' : 'Codex')
+    const detail = action === 'install'
+      ? `Quill will open Terminal and run the official ${label} installer.`
+      : `Quill will open Terminal and start the official ${label} browser login.`
+    if (!confirm(`${action === 'install' ? 'Install' : 'Sign in to'} ${label}?\n\n${detail}`)) return
+
+    const key = `${provider}:${action}`
+    setSetupBusy(key)
+    setSetupMessage(null)
+    setError(null)
+    try {
+      const result = await api.providerSetupAction(provider, action)
+      setSetupMessage({ ok: true, text: `${result.message} Finish the Terminal/browser steps, then click Recheck.` })
+      window.setTimeout(load, 2500)
+    } catch (e: any) {
+      setSetupMessage({ ok: false, text: e?.message || String(e) })
+    } finally {
+      setSetupBusy(null)
     }
   }
 
@@ -182,24 +221,40 @@ export function Setup() {
               icon={<Terminal size={18} />}
               title="Choose Quill provider"
               status={hasProvider ? 'ready' : loading ? 'checking' : 'needs_attention'}
-              detail={hasProvider ? `Quill will use ${labelProvider(activeProvider)}.` : 'Install or sign in to Claude CLI or Codex CLI, then choose one.'}
+              detail={hasProvider ? `Quill will use ${labelProvider(activeProvider)}.` : 'Install or sign in to Claude Code or Codex, then choose one.'}
             >
+              {setupMessage && (
+                <div className="mb-3 rounded-md border px-3 py-2 text-[12px]"
+                  style={{
+                    borderColor: setupMessage.ok ? 'var(--color-green-200)' : 'var(--color-rose-200)',
+                    background: setupMessage.ok ? 'var(--color-green-50)' : 'var(--color-rose-50)',
+                    color: setupMessage.ok ? 'var(--color-green-700)' : 'var(--color-rose-700)',
+                  }}>
+                  {setupMessage.text}
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <ProviderChoice
                   name="Claude"
                   description="Use Claude Code/CLI on this computer."
-                  available={!!state.providers?.claude_cli.available}
+                  available={!!state.providers?.claude_cli.available || !!state.setup?.providers.claude_cli.installed}
                   selected={activeProvider === 'claude_cli'}
                   busy={savingProvider === 'claude_cli'}
                   onClick={() => chooseProvider('claude_cli')}
+                  setup={state.setup?.providers.claude_cli || null}
+                  setupBusy={setupBusy}
+                  onSetupAction={(action) => runProviderSetup('claude_cli', action)}
                 />
                 <ProviderChoice
                   name="Codex"
                   description="Use Codex CLI on this computer."
-                  available={!!state.providers?.codex_cli.available}
+                  available={!!state.providers?.codex_cli.available || !!state.setup?.providers.codex_cli.installed}
                   selected={activeProvider === 'codex_cli'}
                   busy={savingProvider === 'codex_cli'}
                   onClick={() => chooseProvider('codex_cli')}
+                  setup={state.setup?.providers.codex_cli || null}
+                  setupBusy={setupBusy}
+                  onSetupAction={(action) => runProviderSetup('codex_cli', action)}
                 />
               </div>
               <div className="mt-3 text-[12px]" style={{ color: 'var(--color-muted)' }}>
@@ -339,23 +394,28 @@ function StatusPill({ status }: { status: 'ready' | 'checking' | 'needs_attentio
   )
 }
 
-function ProviderChoice({ name, description, available, selected, busy, onClick }: {
+function ProviderChoice({ name, description, available, selected, busy, onClick, setup, setupBusy, onSetupAction }: {
   name: string
   description: string
   available: boolean
   selected: boolean
   busy: boolean
   onClick: () => void
+  setup: ProviderSetupStatus['providers']['claude_cli'] | ProviderSetupStatus['providers']['codex_cli'] | null
+  setupBusy: string | null
+  onSetupAction: (action: 'install' | 'login') => void
 }) {
+  const installBusy = setupBusy === `${setup?.provider}:install`
+  const loginBusy = setupBusy === `${setup?.provider}:login`
+  const installed = setup?.installed ?? available
+  const signedIn = setup?.authenticated === true
+
   return (
-    <button
-      onClick={onClick}
-      disabled={!available || busy}
-      className="min-h-[112px] rounded-lg border p-3 text-left transition-colors"
+    <div
+      className="min-h-[132px] rounded-lg border p-3 text-left transition-colors"
       style={{
         borderColor: selected ? 'var(--color-brand-600)' : 'var(--color-line)',
         background: selected ? 'var(--color-brand-50)' : 'var(--color-paper-2)',
-        opacity: available ? 1 : 0.62,
       }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -363,10 +423,54 @@ function ProviderChoice({ name, description, available, selected, busy, onClick 
         {busy ? <Loader2 size={15} className="animate-spin" /> : selected ? <CheckCircle2 size={15} style={{ color: 'var(--color-brand-700)' }} /> : null}
       </div>
       <p className="mt-2 text-[13px] leading-5" style={{ color: 'var(--color-muted)' }}>{description}</p>
-      <div className="mt-3 text-[12px] font-medium" style={{ color: available ? 'var(--color-green-700)' : 'var(--color-amber-700)' }}>
-        {available ? 'Detected on this computer' : 'Not detected yet'}
+      <div className="mt-3 text-[12px] font-medium" style={{ color: installed ? 'var(--color-green-700)' : 'var(--color-amber-700)' }}>
+        {installed ? (signedIn ? 'Installed and signed in' : 'Installed; sign in needed') : 'Not detected yet'}
       </div>
-    </button>
+      {setup?.account && (
+        <div className="mt-1 truncate text-[12px]" style={{ color: 'var(--color-muted)' }}>{setup.account}</div>
+      )}
+      {setup?.message && installed && !signedIn && (
+        <div className="mt-1 text-[12px]" style={{ color: 'var(--color-muted)' }}>{setup.message}</div>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {!installed && setup?.can_install && (
+          <button
+            type="button"
+            onClick={() => onSetupAction('install')}
+            disabled={installBusy}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium"
+            style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}
+          >
+            {installBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            Install
+          </button>
+        )}
+        {installed && !signedIn && setup?.can_login && (
+          <button
+            type="button"
+            onClick={() => onSetupAction('login')}
+            disabled={loginBusy}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium"
+            style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}
+          >
+            {loginBusy ? <Loader2 size={13} className="animate-spin" /> : <LogIn size={13} />}
+            Sign in
+          </button>
+        )}
+        {installed && signedIn && (
+          <button
+            type="button"
+            onClick={onClick}
+            disabled={!available || busy}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-white"
+            style={{ background: selected ? 'var(--color-green-700)' : 'var(--color-brand-600)' }}
+          >
+            {selected ? <CheckCircle2 size={13} /> : null}
+            {selected ? 'Selected' : 'Use'}
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 
