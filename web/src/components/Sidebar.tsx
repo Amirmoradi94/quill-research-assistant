@@ -47,11 +47,8 @@ export function Sidebar({ user }: { user: { name: string; email: string | null }
     >
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-2 pb-4">
-        <div
-          className="w-8 h-8 overflow-hidden rounded-[9px] border"
-          style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}
-        >
-          <img src={quillLogoMark} alt="" className="h-full w-full object-cover" />
+        <div className="grid h-8 w-8 place-items-center overflow-visible rounded-[9px]">
+          <img src={quillLogoMark} alt="" className="h-8 w-8 object-contain" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px] truncate">Quill Research Assistant</div>
