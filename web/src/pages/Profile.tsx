@@ -951,6 +951,8 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
     setBusy(true); setLog([])
     try {
       await api.extractUserProfile((evt, d) => {
+        if (evt === 'run_id') setLog((l) => [...l, `Run #${d.id} started with ${d.provider}.\n`])
+        if (evt === 'started') setLog((l) => [...l, `Provider ready: ${d.provider}.\n`])
         if (evt === 'text' && d.text) setLog((l) => [...l, d.text])
         if (evt === 'done')  setLog((l) => [...l, '\n✅ done\n'])
         if (evt === 'error') setLog((l) => [...l, `\n❌ ${d.error || d.message}\n`])

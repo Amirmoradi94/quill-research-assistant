@@ -28,13 +28,17 @@ export function Layout() {
         api.profile(),
       ]).then(([desktopResult, docsResult, profileResult]) => {
         if (cancelled) return
-        if (desktopResult.status === 'rejected') {
+        if (
+          desktopResult.status === 'rejected' ||
+          docsResult.status === 'rejected' ||
+          profileResult.status === 'rejected'
+        ) {
           retry = window.setTimeout(checkSetup, 1500)
           return
         }
         const desktop = desktopResult.value
-        const docs = docsResult.status === 'fulfilled' ? docsResult.value : []
-        const p = profileResult.status === 'fulfilled' ? profileResult.value : null
+        const docs = docsResult.value
+        const p = profileResult.value
         const hasProvider = !!desktop.providers.active
         const hasCv = docs.some((doc) => doc.kind === 'cv')
         const hasProfileName = !!p?.name?.trim()

@@ -88,6 +88,10 @@ const KIND_DEFS = [
 const KIND_SET = new Set<string>(KIND_DEFS.map((k) => k.kind))
 const ACCEPT = '.pdf,.docx,.txt,.md,.tex,.bib,.csv,.json,.yaml,.yml'
 
+function notifyDataChanged() {
+  window.dispatchEvent(new CustomEvent('quill:data-changed'))
+}
+
 export function Documents() {
   const [docs, setDocs] = useState<DocumentRow[]>([])
   const [query, setQuery] = useState('')
@@ -480,6 +484,7 @@ function DocumentKindPanel({
       }
       setBusyName(null)
       onChange()
+      notifyDataChanged()
 
       if (triggeredAutoFill) {
         setAutoFillNotice(
@@ -672,6 +677,7 @@ function DocItem({
     } finally {
       setBusy(false)
       onChange()
+      notifyDataChanged()
     }
   }
 
@@ -691,6 +697,7 @@ function DocItem({
     } finally {
       setBusy(false)
       onChange()
+      notifyDataChanged()
     }
   }
 

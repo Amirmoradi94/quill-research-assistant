@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -140,7 +140,7 @@ for _kind, (_Model, _In, _UpdSchema, _Out) in _CHILD_REGISTRY.items():
 # so the frontend just hits /api/user/extract with no body.
 # ───────────────────────────────────────────────────────────────────
 @router.post("/extract")
-def extract_profile(db: Session = Depends(get_db)):
+def extract_profile(request: Request, db: Session = Depends(get_db)):
     """Stream extraction events as SSE. Returns the run id in the first event."""
     from .quill import RunIn, run_workflow  # local import — circular at module level
 
@@ -155,7 +155,9 @@ def extract_profile(db: Session = Depends(get_db)):
         RunIn(
             workflow="extract_user_profile_full",
             params={},  # context is assembled in quill.py from cv_doc_id etc.
+            document_id=u.cv_doc_id,
             timeout_s=420,
         ),
+        request,
         db,
     )

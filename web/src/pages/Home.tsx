@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ComponentType, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ComponentType, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Activity,
@@ -72,7 +72,7 @@ export function Home() {
   const [errors, setErrors] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     const results = await Promise.allSettled([
       api.stats(),
@@ -115,13 +115,28 @@ export function Home() {
     setGrants(fulfilled(grantsResult) ?? [])
     setErrors(results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => String(r.reason)))
     setLoading(false)
-  }
+    return results.some((result) => result.status === 'rejected')
+  }, [])
 
   useEffect(() => {
-    load()
-    window.addEventListener('quill:data-changed', load)
-    return () => window.removeEventListener('quill:data-changed', load)
-  }, [])
+    let retryTimer: number | null = null
+    let disposed = false
+    const refresh = async () => {
+      const hadFailures = await load()
+      if (!disposed && hadFailures) retryTimer = window.setTimeout(refresh, 1500)
+    }
+    const onFocus = () => { void load() }
+
+    void refresh()
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('quill:data-changed', onFocus)
+    return () => {
+      disposed = true
+      if (retryTimer) window.clearTimeout(retryTimer)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('quill:data-changed', onFocus)
+    }
+  }, [load])
 
   const replyCount = stats?.reply_count ?? sent.reduce((sum, row) => sum + row.reply_count, 0)
   const sentCount = stats?.sent_count ?? sent.length

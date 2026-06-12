@@ -202,10 +202,11 @@ def codex_cli_argv(
     cwd: str | None,
     cli_path: str | None,
 ) -> list[str]:
-    """Codex CLI shape — to be refined once we test against the real binary."""
-    argv = [cli_path or "codex", "exec", "--json", prompt]
+    """Codex CLI JSONL streaming command."""
+    argv = [cli_path or "codex", "exec", "--json", "--skip-git-repo-check"]
     if cwd:
-        argv += ["--cwd", cwd]
+        argv += ["-C", cwd]
+    argv.append(prompt)
     return argv
 
 
@@ -275,6 +276,54 @@ def parse_claude_event(raw_line: str) -> StreamEvent | None:
     return None
 
 
+def parse_codex_event(raw_line: str) -> StreamEvent | None:
+    """Parse one line of `codex exec --json` JSONL output."""
+    raw_line = raw_line.strip()
+    if not raw_line:
+        return None
+    try:
+        evt = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return StreamEvent(kind="text", data={"text": raw_line})
+
+    etype = evt.get("type")
+    item = evt.get("item") or {}
+    if etype == "item.completed":
+        item_type = item.get("type")
+        if item_type == "agent_message":
+            return StreamEvent(kind="text", data={"text": item.get("text", "")})
+        if item_type in {"tool_call", "function_call"}:
+            return StreamEvent(
+                kind="tool_call",
+                data={
+                    "id": item.get("id") or item.get("call_id"),
+                    "name": item.get("name") or item.get("tool_name") or item_type,
+                    "input": item.get("input") or item.get("arguments"),
+                },
+            )
+        if item_type in {"tool_call_output", "function_call_output"}:
+            return StreamEvent(
+                kind="tool_result",
+                data={
+                    "id": item.get("id") or item.get("call_id"),
+                    "is_error": bool(item.get("is_error")),
+                    "content": item.get("output") or item.get("content"),
+                },
+            )
+        return None
+    if etype == "turn.completed":
+        return StreamEvent(
+            kind="done",
+            data={
+                "ok": True,
+                "usage": evt.get("usage"),
+            },
+        )
+    if etype == "error":
+        return StreamEvent(kind="error", data={"message": evt.get("message") or str(evt)})
+    return None
+
+
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}\s*$")
 
 
@@ -336,7 +385,7 @@ async def stream(
         parser = parse_claude_event
     elif provider is Provider.CODEX_CLI:
         argv = codex_cli_argv(prompt, cwd=request.cwd, cli_path=cli_path)
-        parser = parse_claude_event  # codex stream shape TBD
+        parser = parse_codex_event
     else:
         yield StreamEvent(
             kind="error",

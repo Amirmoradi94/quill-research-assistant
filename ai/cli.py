@@ -50,6 +50,7 @@ async def spawn_cli(
 
     proc = await _create_proc(
         *argv,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=child_env,

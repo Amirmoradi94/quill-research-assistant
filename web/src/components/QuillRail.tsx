@@ -303,7 +303,7 @@ export function QuillRail() {
 
       <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3 text-[15px]">
         {messages.map((m) => (
-          <MessageView key={m.id} msg={m} />
+          <MessageView key={m.id} msg={m} currentProvider={selectedProvider} />
         ))}
       </div>
 
@@ -472,7 +472,7 @@ function ProviderSelect({
   )
 }
 
-function MessageView({ msg }: { msg: Message }) {
+function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: QuillProvider }) {
   if (msg.role === 'user') {
     return (
       <div
@@ -490,7 +490,12 @@ function MessageView({ msg }: { msg: Message }) {
       <div className="flex items-center gap-1.5 text-[11px] font-mono mb-1.5" style={{ color: 'var(--color-muted)' }}>
         <WandSparkles size={11} style={{ color: 'var(--color-amber-600)' }} />
         <span>Quill</span>
-        {msg.meta?.provider && <span>via {msg.meta.provider}</span>}
+        {msg.meta?.provider && (
+          <span>
+            via {msg.meta.provider}
+            {msg.meta.provider !== currentProvider ? ' (previous provider)' : ''}
+          </span>
+        )}
         {msg.meta?.cost !== undefined && <span>${msg.meta.cost.toFixed(4)}</span>}
         {msg.meta?.durationMs !== undefined && <span>{(msg.meta.durationMs / 1000).toFixed(1)}s</span>}
       </div>
