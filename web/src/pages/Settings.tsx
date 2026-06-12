@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, WifiOff, RefreshCw, Mail, AlertCircle, Inbox, HardDrive } from 'lucide-react'
-import { api, type DesktopStatus, type UserProfile } from '@/lib/api'
+import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, WifiOff, RefreshCw, Mail, AlertCircle, Inbox, HardDrive, Download, LogIn, ShieldCheck } from 'lucide-react'
+import { api, type DesktopStatus, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
 
 type SettingsT = {
   ai_provider: string
@@ -48,14 +48,23 @@ export function Settings() {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [savedAt, setSavedAt] = useState<number>(0)
   const [providers, setProviders] = useState<ProvidersState | null>(null)
+  const [setup, setSetup] = useState<ProviderSetupStatus | null>(null)
   const [desktop, setDesktop] = useState<DesktopStatus | null>(null)
   const [providersLoading, setProvidersLoading] = useState(false)
+  const [setupBusy, setSetupBusy] = useState<string | null>(null)
+  const [setupMessage, setSetupMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const loadProviders = () => {
     setProvidersLoading(true)
-    api.aiProviders().then((d) => {
-      setProviders(d)
+    Promise.allSettled([
+      api.aiProviders(),
+      api.providerSetupStatus(),
+      api.desktopStatus(),
+    ]).then(([providersResult, setupResult, desktopResult]) => {
+      if (providersResult.status === 'fulfilled') setProviders(providersResult.value)
+      if (setupResult.status === 'fulfilled') setSetup(setupResult.value)
+      if (desktopResult.status === 'fulfilled') setDesktop(desktopResult.value)
       setProvidersLoading(false)
     }).catch(() => setProvidersLoading(false))
   }
@@ -63,7 +72,6 @@ export function Settings() {
   useEffect(() => {
     api.settings().then(setS).catch((e) => setErr(String(e)))
     api.profile().then(setProfile).catch(() => {})
-    api.desktopStatus().then(setDesktop).catch(() => {})
     loadProviders()
   }, [])
 
@@ -84,6 +92,29 @@ export function Settings() {
     const next = await api.patchProfile(patch)
     setProfile(next)
     setSavedAt(Date.now())
+  }
+
+  const runProviderSetup = async (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') => {
+    const item = setup?.providers[provider]
+    const label = item?.label || (provider === 'claude_cli' ? 'Claude Code' : 'Codex')
+    const title = action === 'install' ? `Install ${label}?` : `Sign in to ${label}?`
+    const detail = action === 'install'
+      ? `Quill will open Terminal and run the official ${label} installer. Continue?`
+      : `Quill will open Terminal and start the official ${label} browser login flow. Continue?`
+    if (!confirm(`${title}\n\n${detail}`)) return
+
+    const key = `${provider}:${action}`
+    setSetupBusy(key)
+    setSetupMessage(null)
+    try {
+      const result = await api.providerSetupAction(provider, action)
+      setSetupMessage({ ok: true, text: `${result.message} Complete the Terminal/browser steps, then click Recheck.` })
+      window.setTimeout(loadProviders, 2500)
+    } catch (e: any) {
+      setSetupMessage({ ok: false, text: e?.message || String(e) })
+    } finally {
+      setSetupBusy(null)
+    }
   }
 
   return (
@@ -213,6 +244,17 @@ export function Settings() {
             onSaveKey={(v) => save({ openai_api_key: v } as any)}
           />
         </div>
+
+        <ProviderSetupWizard
+          setup={setup}
+          activeProvider={s.ai_provider}
+          busy={setupBusy}
+          message={setupMessage}
+          loading={providersLoading}
+          onAction={runProviderSetup}
+          onRefresh={loadProviders}
+          onSetDefault={(provider) => save({ ai_provider: provider })}
+        />
 
         <Field label="Daily cost cap (USD)" value={String(s.daily_cost_cap_usd)} type="number"
           onSave={(v) => save({ daily_cost_cap_usd: parseFloat(v) || 0 } as any)} />
@@ -360,6 +402,151 @@ function Lbl({ children }: { children: React.ReactNode }) {
     <div className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>
       {children}
     </div>
+  )
+}
+
+function ProviderSetupWizard({
+  setup,
+  activeProvider,
+  busy,
+  message,
+  loading,
+  onAction,
+  onRefresh,
+  onSetDefault,
+}: {
+  setup: ProviderSetupStatus | null
+  activeProvider: string
+  busy: string | null
+  message: { ok: boolean; text: string } | null
+  loading: boolean
+  onAction: (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') => void
+  onRefresh: () => void
+  onSetDefault: (provider: 'claude_cli' | 'codex_cli') => void
+}) {
+  const rows = setup ? [setup.providers.claude_cli, setup.providers.codex_cli] : []
+
+  return (
+    <div className="rounded-md border p-3 mb-4"
+      style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <div className="text-[13px] font-semibold inline-flex items-center gap-1.5"
+            style={{ color: 'var(--color-ink)' }}>
+            <ShieldCheck size={14} />
+            Guided subscription connection
+          </div>
+          <div className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+            Use your Claude or ChatGPT subscription through the official local CLI. Quill opens Terminal for install or login and never asks for your password.
+          </div>
+        </div>
+        <button onClick={onRefresh}
+          className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] shrink-0"
+          style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}>
+          <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+          Recheck
+        </button>
+      </div>
+
+      <div className="grid gap-2">
+        {rows.length === 0 ? (
+          <div className="text-[12px]" style={{ color: 'var(--color-muted)' }}>Checking local provider setup…</div>
+        ) : rows.map((item) => {
+          const provider = item.provider
+          const installBusy = busy === `${provider}:install`
+          const loginBusy = busy === `${provider}:login`
+          const ready = item.installed && item.authenticated === true
+          const authKnown = item.authenticated !== null
+          return (
+            <div key={provider} className="rounded-md border px-3 py-2"
+              style={{ background: 'var(--color-white)', borderColor: ready ? 'var(--color-green-200)' : 'var(--color-line)' }}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[13px] font-semibold" style={{ color: 'var(--color-ink)' }}>{item.label}</span>
+                    <StatusPill ok={item.installed} label={item.installed ? 'Installed' : 'Missing'} />
+                    <StatusPill ok={ready} label={ready ? 'Signed in' : authKnown ? 'Not signed in' : 'Sign-in unknown'} />
+                    {activeProvider === provider && (
+                      <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                        style={{ background: 'var(--color-brand-600)', color: 'white' }}>
+                        Default
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+                    {item.message}
+                    {item.account && <> Account: {item.account}.</>}
+                    {item.auth_method && <> Access: {item.auth_method}.</>}
+                  </div>
+                  {item.path && (
+                    <div className="mt-1 font-mono text-[10px] break-all" style={{ color: 'var(--color-muted-2)' }}>
+                      {item.path}{item.version ? ` · ${item.version}` : ''}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                  {!item.installed && (
+                    <button onClick={() => onAction(provider, 'install')} disabled={!item.can_install || installBusy}
+                      className="inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-medium disabled:opacity-50"
+                      style={{ background: 'var(--color-brand-50)', borderColor: 'var(--color-brand-300)', color: 'var(--color-brand-700)' }}>
+                      <Download size={11} />
+                      {installBusy ? 'Opening…' : 'Install'}
+                    </button>
+                  )}
+                  {item.installed && !ready && (
+                    <button onClick={() => onAction(provider, 'login')} disabled={!item.can_login || loginBusy}
+                      className="inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-medium disabled:opacity-50"
+                      style={{ background: 'var(--color-brand-50)', borderColor: 'var(--color-brand-300)', color: 'var(--color-brand-700)' }}>
+                      <LogIn size={11} />
+                      {loginBusy ? 'Opening…' : 'Sign in'}
+                    </button>
+                  )}
+                  {ready && activeProvider !== provider && (
+                    <button onClick={() => onSetDefault(provider)}
+                      className="inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-medium"
+                      style={{ background: 'var(--color-green-50)', borderColor: 'var(--color-green-200)', color: 'var(--color-green-700)' }}>
+                      Use
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {message && (
+        <div className="mt-3 rounded px-3 py-2 text-[12px] flex items-start gap-2"
+          style={{
+            background: message.ok ? 'var(--color-green-50)' : 'var(--color-rose-50)',
+            color: message.ok ? 'var(--color-green-700)' : 'var(--color-rose-700)',
+          }}>
+          {message.ok ? <CheckCircle2 size={13} className="mt-0.5 shrink-0" /> : <AlertCircle size={13} className="mt-0.5 shrink-0" />}
+          <span>{message.text}</span>
+        </div>
+      )}
+
+      {setup?.platform !== 'Darwin' && (
+        <div className="mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+          Guided install and login buttons are currently available on macOS. On this platform, install the provider manually and click Recheck.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StatusPill({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]"
+      style={{
+        background: ok ? 'var(--color-green-50)' : 'var(--color-paper-2)',
+        borderColor: ok ? 'var(--color-green-200)' : 'var(--color-line)',
+        color: ok ? 'var(--color-green-700)' : 'var(--color-muted)',
+      }}>
+      {ok ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+      {label}
+    </span>
   )
 }
 

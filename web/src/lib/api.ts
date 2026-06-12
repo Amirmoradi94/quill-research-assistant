@@ -112,6 +112,29 @@ export type DesktopStatus = {
 
 export type AiProvidersStatus = DesktopStatus['providers']
 
+export type ProviderSetupProvider = {
+  provider: 'claude_cli' | 'codex_cli'
+  label: string
+  installed: boolean
+  path: string | null
+  version: string | null
+  authenticated: boolean | null
+  account: string | null
+  auth_method: string | null
+  message: string
+  can_install: boolean
+  can_login: boolean
+  install_url: string
+}
+
+export type ProviderSetupStatus = {
+  platform: string
+  providers: {
+    claude_cli: ProviderSetupProvider
+    codex_cli: ProviderSetupProvider
+  }
+}
+
 export type Draft = {
   id: number
   professor_id: number
@@ -620,6 +643,12 @@ export const api = {
   recoverStaleAiRuns: () =>
     request<{ updated: number }>('/api/ai/recover-stale-runs', { method: 'POST' }),
   aiProviders: () => request<AiProvidersStatus>('/api/ai/providers'),
+  providerSetupStatus: () => request<ProviderSetupStatus>('/api/ai/provider-setup'),
+  providerSetupAction: (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') =>
+    request<{ ok: boolean; provider: string; action: string; message: string }>('/api/ai/provider-setup', {
+      method: 'POST',
+      body: JSON.stringify({ provider, action }),
+    }),
   desktopStatus: () => request<DesktopStatus>('/api/desktop/status'),
   profile: () => request<UserProfile>('/api/profile'),
   patchProfile: (payload: Partial<UserProfile>) =>

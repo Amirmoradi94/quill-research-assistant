@@ -20,6 +20,10 @@ import hashlib
 import ipaddress
 import json
 import os
+import platform
+import shlex
+import shutil
+import subprocess
 import time
 from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Optional
@@ -117,6 +121,11 @@ class RetryRunIn(BaseModel):
     use_fallback_provider: bool = False
 
 
+class ProviderSetupIn(BaseModel):
+    provider: str
+    action: str
+
+
 # ───────────────────────────────────────────────────────────────────
 # Helpers
 # ───────────────────────────────────────────────────────────────────
@@ -158,6 +167,139 @@ def _select_fallback_provider(settings: models.Settings, failed_provider: str) -
         if _provider_available(settings, provider):
             return provider
     return None
+
+
+def _run_probe(argv: list[str], timeout_s: int = 8) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env={**os.environ, "RTK_DISABLE": "1", "NO_RTK": "1"},
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": (proc.stdout or "").strip(),
+            "stderr": (proc.stderr or "").strip(),
+        }
+    except FileNotFoundError:
+        return {"ok": False, "returncode": 127, "stdout": "", "stderr": "Command not found."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "returncode": 124, "stdout": "", "stderr": "Command timed out."}
+
+
+def _provider_setup_status(provider: str, configured_path: str | None = None) -> dict[str, Any]:
+    if provider not in {"claude_cli", "codex_cli"}:
+        raise HTTPException(400, "Unsupported provider.")
+
+    command = "claude" if provider == "claude_cli" else "codex"
+    label = "Claude Code" if provider == "claude_cli" else "Codex"
+    path = configured_path or shutil.which(command)
+    status: dict[str, Any] = {
+        "provider": provider,
+        "label": label,
+        "installed": bool(path),
+        "path": path,
+        "version": None,
+        "authenticated": None,
+        "account": None,
+        "auth_method": None,
+        "message": "Not installed.",
+        "can_install": platform.system() == "Darwin",
+        "can_login": bool(path) and platform.system() == "Darwin",
+        "install_url": "https://claude.ai/install.sh" if provider == "claude_cli" else "https://chatgpt.com/codex/install.sh",
+    }
+    if not path:
+        return status
+
+    version = _run_probe([path, "--version"])
+    if version["ok"]:
+        status["version"] = version["stdout"].splitlines()[0] if version["stdout"] else None
+
+    if provider == "claude_cli":
+        auth = _run_probe([path, "auth", "status"])
+        if auth["ok"]:
+            try:
+                payload = json.loads(auth["stdout"] or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            logged_in = bool(payload.get("loggedIn"))
+            status.update({
+                "authenticated": logged_in,
+                "account": payload.get("email"),
+                "auth_method": payload.get("subscriptionType") or payload.get("authMethod"),
+                "message": "Signed in." if logged_in else "Installed, but not signed in.",
+            })
+        else:
+            status.update({
+                "authenticated": False,
+                "message": auth["stderr"] or auth["stdout"] or "Installed, but not signed in.",
+            })
+    else:
+        auth = _run_probe([path, "login", "status"])
+        text = "\n".join(x for x in (auth["stdout"], auth["stderr"]) if x).strip()
+        logged_in = auth["ok"] and "logged in" in text.lower()
+        status.update({
+            "authenticated": logged_in,
+            "auth_method": text.replace("Logged in using ", "") if logged_in else None,
+            "message": text or ("Signed in." if logged_in else "Installed, but not signed in."),
+        })
+
+    return status
+
+
+def _osascript_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _open_setup_command_in_terminal(command: str) -> None:
+    if platform.system() != "Darwin":
+        raise HTTPException(400, "Guided install/login is currently supported on macOS only.")
+
+    script = (
+        'tell application "Terminal"\n'
+        f"  do script {_osascript_string(command)}\n"
+        "  activate\n"
+        "end tell\n"
+    )
+    subprocess.Popen(
+        ["osascript", "-e", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _setup_terminal_command(provider: str, action: str) -> str:
+    if provider == "claude_cli" and action == "install":
+        body = "curl -fsSL https://claude.ai/install.sh | bash"
+        title = "Claude Code install"
+    elif provider == "claude_cli" and action == "login":
+        body = "claude auth login --claudeai"
+        title = "Claude Code login"
+    elif provider == "codex_cli" and action == "install":
+        body = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        title = "Codex install"
+    elif provider == "codex_cli" and action == "login":
+        body = "codex login"
+        title = "Codex login"
+    else:
+        raise HTTPException(400, "Unsupported provider setup action.")
+
+    return (
+        f"echo {shlex.quote(title)}; "
+        "echo; "
+        f"{body}; "
+        "status=$?; echo; "
+        'if [ "$status" -eq 0 ]; then echo "Finished. Return to Quill and click Recheck."; '
+        'else echo "The command did not finish successfully. Return to Quill for manual steps."; fi; '
+        "echo; "
+        "read -n 1 -s -r -p 'Press any key to close this window...'; "
+        "exit $status"
+    )
 
 
 def _classify_ai_error(text: str | None) -> str:
@@ -1022,6 +1164,50 @@ def providers_status(db: Session = Depends(get_db)):
         "openai_api": {"configured": bool(s.openai_api_key)},
         "active": (_select_provider_for(s).value if _select_provider_for(s) else None),
         "daily_cost_cap_usd": s.daily_cost_cap_usd,
+    }
+
+
+@router.get("/provider-setup")
+def provider_setup_status(db: Session = Depends(get_db)):
+    """Detailed local CLI setup status for the Settings connector wizard."""
+    s = _settings(db)
+    return {
+        "platform": platform.system(),
+        "providers": {
+            "claude_cli": _provider_setup_status("claude_cli", s.claude_cli_path),
+            "codex_cli": _provider_setup_status("codex_cli", s.codex_cli_path),
+        },
+    }
+
+
+@router.post("/provider-setup")
+def provider_setup_action(payload: ProviderSetupIn, request: Request, db: Session = Depends(get_db)):
+    """Open an allowlisted provider install/login command in Terminal.
+
+    This endpoint intentionally does not accept arbitrary shell text. The UI
+    can only choose a known provider and one of the known setup actions.
+    """
+    _verify_ai_request(request)
+    if payload.provider not in {"claude_cli", "codex_cli"}:
+        raise HTTPException(400, "Unsupported provider.")
+    if payload.action not in {"install", "login"}:
+        raise HTTPException(400, "Unsupported setup action.")
+
+    s = _settings(db)
+    before = _provider_setup_status(
+        payload.provider,
+        s.claude_cli_path if payload.provider == "claude_cli" else s.codex_cli_path,
+    )
+    if payload.action == "login" and not before["installed"]:
+        raise HTTPException(400, f"{before['label']} must be installed before login.")
+
+    command = _setup_terminal_command(payload.provider, payload.action)
+    _open_setup_command_in_terminal(command)
+    return {
+        "ok": True,
+        "provider": payload.provider,
+        "action": payload.action,
+        "message": f"Opened {before['label']} {payload.action} in Terminal.",
     }
 
 
