@@ -203,7 +203,14 @@ def codex_cli_argv(
     cli_path: str | None,
 ) -> list[str]:
     """Codex CLI JSONL streaming command."""
-    argv = [cli_path or "codex", "exec", "--json", "--skip-git-repo-check"]
+    argv = [
+        cli_path or "codex",
+        "exec",
+        "--json",
+        "--sandbox",
+        "danger-full-access",
+        "--skip-git-repo-check",
+    ]
     if cwd:
         argv += ["-C", cwd]
     argv.append(prompt)
