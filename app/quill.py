@@ -1063,6 +1063,20 @@ def run_workflow(req: RunIn, request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/run/background", response_model=RunOut, status_code=202)
+def start_background_workflow(
+    req: RunIn,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Start a workflow and keep draining it after the HTTP response closes."""
+    _verify_ai_request(request)
+    ai_run, run_request, provider, cli_path = _prepare_ai_run(db, req)
+    background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path)
+    return ai_run
+
+
 @router.get("/runs/{run_id}", response_model=RunOut)
 def get_run(run_id: int, db: Session = Depends(get_db)):
     _cleanup_stale_runs(db)

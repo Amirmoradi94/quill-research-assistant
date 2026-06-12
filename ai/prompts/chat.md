@@ -130,13 +130,13 @@ Key data model facts:
 
 Call the API once and answer directly. Do not loop through multiple commands guessing paths.
 
-You can also **trigger AI workflows** via POST /api/ai/run. This starts a background workflow and returns an SSE stream — you only need to fire it, not read the stream:
+You can also **trigger AI workflows** via POST /api/ai/run/background. This starts a background workflow and returns a normal JSON run row. Use this endpoint for long-running tasks that the user asks you to start, then report the returned `id` and `status`.
 
 ```python
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://localhost:8000/api/ai/run',
+    'http://localhost:8000/api/ai/run/background',
     data=json.dumps({
         'workflow': 'discover_professors',
         'params': {
@@ -150,9 +150,8 @@ req = urllib.request.Request(
     headers={'Content-Type': 'application/json'},
     method='POST'
 )
-# Just open and close — workflow runs in background
-urllib.request.urlopen(req).read(100)
-print('Discovery started')
+run = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({'id': run['id'], 'status': run['status']}, indent=2))
 "
 ```
 
@@ -160,7 +159,7 @@ Workflow names and their key params:
 - `discover_professors` — params: `position_type` (postdoc|phd|master), `count` (5-20), `target_universities` (optional string), `focus_override` (optional string), `exclude_universities` (optional string)
 - `research_professor` — requires top-level `professor_id`
 - `draft_email` — requires top-level `professor_id`
-- `extract_profile` — requires top-level `document_id`
+- `extract_user_profile_full` — requires top-level `document_id`; use this for CV-based profile auto-fill
 
 ⚠️ **`professor_id`, `document_id`, and `grant_id` are TOP-LEVEL fields on the
 request body — NOT inside `params`.** If you nest them under `params`, the
@@ -174,7 +173,7 @@ missing, so you'll get a clear error instead of a silent dud.
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://localhost:8000/api/ai/run',
+    'http://localhost:8000/api/ai/run/background',
     data=json.dumps({
         'workflow': 'research_professor',
         'professor_id': 80,
@@ -183,8 +182,8 @@ req = urllib.request.Request(
     headers={'Content-Type': 'application/json'},
     method='POST'
 )
-urllib.request.urlopen(req).read(100)
-print('research_professor started for professor 80')
+run = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({'id': run['id'], 'status': run['status']}, indent=2))
 "
 ```
 
@@ -194,7 +193,7 @@ print('research_professor started for professor 80')
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://localhost:8000/api/ai/run',
+    'http://localhost:8000/api/ai/run/background',
     data=json.dumps({
         'workflow': 'draft_email',
         'professor_id': 80,
@@ -205,8 +204,8 @@ req = urllib.request.Request(
     headers={'Content-Type': 'application/json'},
     method='POST'
 )
-urllib.request.urlopen(req).read(100)
-print('draft_email started for professor 80')
+run = json.loads(urllib.request.urlopen(req).read())
+print(json.dumps({'id': run['id'], 'status': run['status']}, indent=2))
 "
 ```
 
