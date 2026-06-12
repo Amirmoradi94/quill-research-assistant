@@ -6,6 +6,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { fetchProviders, runQuill, type ProvidersStatus, type QuillEvent } from '@/lib/quill'
+import { api } from '@/lib/api'
 
 type Role = 'user' | 'assistant'
 
@@ -75,6 +76,10 @@ function loadProvider(): QuillProvider {
   return 'claude_cli'
 }
 
+function isQuillProvider(provider: string | null | undefined): provider is QuillProvider {
+  return provider === 'claude_cli' || provider === 'codex_cli'
+}
+
 export function QuillRail() {
   const [text, setText] = useState('')
   const [messages, setMessages] = useState<Message[]>(loadMessages)
@@ -99,9 +104,16 @@ export function QuillRail() {
         if (cancelled) return
         setProviders(status)
         setProviderError(null)
+        const backendProvider = isQuillProvider(status.active)
+          ? status.active
+          : isQuillProvider(status.selected_default)
+            ? status.selected_default
+            : null
         const claudeReady = status.claude_cli.available
         const codexReady = status.codex_cli.available
         setSelectedProvider((current) => {
+          if (backendProvider === 'claude_cli' && claudeReady) return backendProvider
+          if (backendProvider === 'codex_cli' && codexReady) return backendProvider
           if (current === 'claude_cli' && claudeReady) return current
           if (current === 'codex_cli' && codexReady) return current
           if (claudeReady) return 'claude_cli'
@@ -203,6 +215,18 @@ export function QuillRail() {
     abortRef.current?.abort()
   }
 
+  async function selectProvider(provider: QuillProvider) {
+    setSelectedProvider(provider)
+    try {
+      await api.patchSettings({ ai_provider: provider })
+      const status = await fetchProviders()
+      setProviders(status)
+      setProviderError(null)
+    } catch (e: any) {
+      setProviderError(e?.message || String(e))
+    }
+  }
+
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter inserts a newline; Cmd/Ctrl+Enter still sends
     // (so muscle memory keeps working for anyone used to chat apps).
@@ -271,7 +295,7 @@ export function QuillRail() {
             providers={providers}
             error={providerError}
             selected={selectedProvider}
-            onSelect={setSelectedProvider}
+            onSelect={selectProvider}
             disabled={running}
           />
         </div>
