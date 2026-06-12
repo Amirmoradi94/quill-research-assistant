@@ -33,6 +33,8 @@ type ToolCall = {
 
 type QuillProvider = 'claude_cli' | 'codex_cli'
 
+const REVEAL_INTERVAL_MS = 35
+
 const BOOT_MSG: Message = {
   id: 'boot',
   role: 'assistant',
@@ -90,11 +92,20 @@ export function QuillRail() {
   const [selectedProvider, setSelectedProvider] = useState<QuillProvider>(loadProvider)
   const abortRef = useRef<AbortController | null>(null)
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const revealRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const revealQueuesRef = useRef<Map<string, string[]>>(new Map())
+  const pendingDoneRef = useRef<Map<string, QuillEvent>>(new Map())
   const bodyRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   // Persist history to localStorage whenever messages change.
   useEffect(() => { saveMessages(messages) }, [messages])
+
+  useEffect(() => {
+    return () => {
+      if (revealRef.current) clearInterval(revealRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -194,9 +205,10 @@ export function QuillRail() {
         },
         { signal: controller.signal }
       )) {
-        applyEvent(aiId, evt, setMessages)
+        handleQuillEvent(aiId, evt)
       }
     } catch (err: any) {
+      clearRevealQueue(aiId)
       if (controller.signal.aborted) {
         applyError(aiId, 'Cancelled.', setMessages)
       } else {
@@ -213,6 +225,64 @@ export function QuillRail() {
 
   function stop() {
     abortRef.current?.abort()
+  }
+
+  function handleQuillEvent(aiId: string, evt: QuillEvent) {
+    if (evt.kind === 'text') {
+      enqueueReveal(aiId, evt.data.text || '')
+      return
+    }
+    if (evt.kind === 'done' && hasQueuedReveal(aiId)) {
+      pendingDoneRef.current.set(aiId, evt)
+      return
+    }
+    applyEvent(aiId, evt, setMessages)
+  }
+
+  function enqueueReveal(aiId: string, textChunk: string) {
+    if (!textChunk) return
+    const queue = revealQueuesRef.current.get(aiId) ?? []
+    queue.push(...splitRevealTokens(textChunk))
+    revealQueuesRef.current.set(aiId, queue)
+    startRevealPump()
+  }
+
+  function hasQueuedReveal(aiId: string) {
+    return (revealQueuesRef.current.get(aiId)?.length ?? 0) > 0
+  }
+
+  function startRevealPump() {
+    if (revealRef.current) return
+    revealRef.current = setInterval(() => {
+      let hasMore = false
+      for (const [aiId, queue] of revealQueuesRef.current.entries()) {
+        const token = queue.shift()
+        if (!token) {
+          revealQueuesRef.current.delete(aiId)
+          const done = pendingDoneRef.current.get(aiId)
+          if (done) {
+            pendingDoneRef.current.delete(aiId)
+            applyEvent(aiId, done, setMessages)
+          }
+          continue
+        }
+        appendMessageText(aiId, token, setMessages)
+        if (queue.length > 0) hasMore = true
+      }
+      if (!hasMore && revealQueuesRef.current.size === 0 && revealRef.current) {
+        clearInterval(revealRef.current)
+        revealRef.current = null
+      }
+    }, REVEAL_INTERVAL_MS)
+  }
+
+  function clearRevealQueue(aiId: string) {
+    revealQueuesRef.current.delete(aiId)
+    pendingDoneRef.current.delete(aiId)
+    if (revealQueuesRef.current.size === 0 && revealRef.current) {
+      clearInterval(revealRef.current)
+      revealRef.current = null
+    }
   }
 
   async function selectProvider(provider: QuillProvider) {
@@ -609,6 +679,16 @@ function toolArg(input: any): string {
 
 // ─────────── Event reducer ───────────
 type SetMessages = React.Dispatch<React.SetStateAction<Message[]>>
+
+function splitRevealTokens(text: string): string[] {
+  return text.match(/\S+\s*|\s+/g) ?? [text]
+}
+
+function appendMessageText(aiId: string, token: string, setMessages: SetMessages) {
+  setMessages((prev) =>
+    prev.map((m) => (m.id === aiId ? { ...m, text: m.text + token } : m))
+  )
+}
 
 function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
   setMessages((prev) =>
