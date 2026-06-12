@@ -76,11 +76,12 @@ app.add_middleware(
         for o in os.environ.get(
             "POSTDOC_CORS_ORIGINS",
             "http://localhost:8000,http://127.0.0.1:8000,"
-            "http://localhost:5173,http://127.0.0.1:5173",
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://tauri.localhost,https://tauri.localhost,tauri://localhost",
         ).split(",")
         if o.strip()
     ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )

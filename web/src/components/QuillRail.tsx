@@ -92,8 +92,11 @@ export function QuillRail() {
   useEffect(() => { saveMessages(messages) }, [messages])
 
   useEffect(() => {
-    fetchProviders()
+    let cancelled = false
+    const refreshProviders = () => {
+      fetchProviders()
       .then((status) => {
+        if (cancelled) return
         setProviders(status)
         setProviderError(null)
         const claudeReady = status.claude_cli.available
@@ -106,7 +109,18 @@ export function QuillRail() {
           return current
         })
       })
-      .catch((e) => setProviderError(e?.message || String(e)))
+      .catch((e) => {
+        if (cancelled) return
+        setProviderError(e?.message || String(e))
+      })
+    }
+
+    refreshProviders()
+    const interval = window.setInterval(refreshProviders, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
   }, [])
 
   useEffect(() => {

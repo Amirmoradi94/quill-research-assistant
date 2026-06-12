@@ -87,6 +87,12 @@ export function Setup() {
 
   useEffect(() => { void load() }, [])
 
+  useEffect(() => {
+    if (state.desktop || loading || !error?.startsWith('Local backend')) return
+    const retry = window.setTimeout(() => { void load() }, 2000)
+    return () => window.clearTimeout(retry)
+  }, [error, loading, state.desktop])
+
   const activeProvider = state.providers?.active || state.desktop?.providers.active || ''
   const hasProvider = !!activeProvider
   const defaultCv = useMemo(

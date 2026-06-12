@@ -19,24 +19,37 @@ export function Layout() {
     if (localStorage.getItem('postdoc.setup.completed') === 'true') return
 
     let cancelled = false
-    Promise.allSettled([
-      api.desktopStatus(),
-      api.documents('cv'),
-      api.profile(),
-    ]).then(([desktopResult, docsResult, profileResult]) => {
-      if (cancelled) return
-      const desktop = desktopResult.status === 'fulfilled' ? desktopResult.value : null
-      const docs = docsResult.status === 'fulfilled' ? docsResult.value : []
-      const p = profileResult.status === 'fulfilled' ? profileResult.value : null
-      const hasProvider = !!desktop?.providers.active
-      const hasCv = docs.some((doc) => doc.kind === 'cv')
-      const hasProfileName = !!p?.name?.trim()
-      if (!hasProvider || !hasCv || !hasProfileName) {
-        navigate('/setup', { replace: true })
-      }
-    })
+    let retry: ReturnType<typeof setTimeout> | null = null
 
-    return () => { cancelled = true }
+    const checkSetup = () => {
+      Promise.allSettled([
+        api.desktopStatus(),
+        api.documents('cv'),
+        api.profile(),
+      ]).then(([desktopResult, docsResult, profileResult]) => {
+        if (cancelled) return
+        if (desktopResult.status === 'rejected') {
+          retry = window.setTimeout(checkSetup, 1500)
+          return
+        }
+        const desktop = desktopResult.value
+        const docs = docsResult.status === 'fulfilled' ? docsResult.value : []
+        const p = profileResult.status === 'fulfilled' ? profileResult.value : null
+        const hasProvider = !!desktop.providers.active
+        const hasCv = docs.some((doc) => doc.kind === 'cv')
+        const hasProfileName = !!p?.name?.trim()
+        if (!hasProvider || !hasCv || !hasProfileName) {
+          navigate('/setup', { replace: true })
+        }
+      })
+    }
+
+    checkSetup()
+
+    return () => {
+      cancelled = true
+      if (retry) window.clearTimeout(retry)
+    }
   }, [location.pathname, navigate])
 
   const user = {
