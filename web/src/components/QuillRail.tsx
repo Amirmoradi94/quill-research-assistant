@@ -1,12 +1,13 @@
 import {
   History, Paperclip, ArrowUp, Square,
   CheckCircle2, Loader, AlertCircle, ChevronDown, ChevronRight,
-  Bot, CircleDot, Database, FileText, Mail, WandSparkles,
+  CircleDot, Database, FileText, Mail, WandSparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { fetchProviders, runQuill, type ProvidersStatus, type QuillEvent } from '@/lib/quill'
 import { api } from '@/lib/api'
+import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
 type Role = 'user' | 'assistant'
 
@@ -324,9 +325,9 @@ export function QuillRail() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="grid size-7 place-items-center rounded-md border"
-                style={{ background: 'var(--color-ink)', color: 'white', borderColor: 'var(--color-ink)' }}>
-                <Bot size={15} />
+              <span className="size-7 overflow-hidden rounded-md border"
+                style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
+                <img src={quillLogoMark} alt="" className="h-full w-full object-cover" />
               </span>
               <div className="min-w-0">
                 <div className="font-bold text-[14px] leading-tight" style={{ color: 'var(--color-ink)' }}>

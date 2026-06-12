@@ -15,6 +15,7 @@ import {
   User as UserIcon,
   Wrench,
 } from 'lucide-react'
+import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
 const NAV = [
   { to: '/',           label: 'Home',       icon: House,           end: true },
@@ -47,15 +48,10 @@ export function Sidebar({ user }: { user: { name: string; email: string | null }
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-2 pb-4">
         <div
-          className="w-8 h-8 rounded-[9px] grid place-items-center text-white font-bold text-[13px]"
-          style={{ background: 'linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))' }}
+          className="w-8 h-8 overflow-hidden rounded-[9px] border"
+          style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}
         >
-          {(user.name || 'U')
-            .split(' ')
-            .filter(Boolean)
-            .map((w) => w[0].toUpperCase())
-            .slice(0, 2)
-            .join('')}
+          <img src={quillLogoMark} alt="" className="h-full w-full object-cover" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-[15px] truncate">Quill Research Assistant</div>
