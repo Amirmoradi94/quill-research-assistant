@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState, type ComponentType, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   ArrowDown,
-  ArrowRight,
   ArrowUp,
-  CheckCircle2,
-  ExternalLink,
   Filter,
   Mail,
   Plus,
@@ -13,34 +10,20 @@ import {
   Search,
   Sparkles,
   Target,
-  Trash2,
   Users,
   X,
 } from 'lucide-react'
 import { api, type Professor } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
-import { useConfirm } from '@/components/ConfirmDialog'
-import { openExternalUrl } from '@/lib/openExternal'
 
 type SortKey = 'number' | 'name' | 'university' | 'dept_lab' | 'research_category' | 'tier' | 'status' | 'email' | 'score'
 type IconComponent = ComponentType<{ size?: number; className?: string; style?: CSSProperties }>
 
 const STATUS_OPTIONS = ['drafting', 'sent', 'no_reply', 'replied', 'interview', 'offer', 'rejected', 'skipped']
 
-const STATUS_TONES: Record<string, { bg: string; fg: string; border: string }> = {
-  drafting: { bg: 'var(--color-paper)', fg: 'var(--color-muted)', border: 'var(--color-line)' },
-  sent: { bg: 'var(--color-brand-50)', fg: 'var(--color-brand-700)', border: 'var(--color-brand-200)' },
-  no_reply: { bg: 'var(--color-amber-50)', fg: 'var(--color-amber-700)', border: 'var(--color-line-strong)' },
-  replied: { bg: 'var(--color-green-50)', fg: 'var(--color-green-700)', border: 'var(--color-line-strong)' },
-  interview: { bg: 'var(--color-green-50)', fg: 'var(--color-green-700)', border: 'var(--color-line-strong)' },
-  offer: { bg: 'var(--color-green-50)', fg: 'var(--color-green-700)', border: 'var(--color-line-strong)' },
-  rejected: { bg: 'var(--color-rose-50)', fg: 'var(--color-rose-700)', border: 'var(--color-line-strong)' },
-  skipped: { bg: 'var(--color-paper-2)', fg: 'var(--color-muted)', border: 'var(--color-line)' },
-}
-
 export function Professors() {
-  const confirm = useConfirm()
+  const navigate = useNavigate()
   const [profs, setProfs] = useState<Professor[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [q, setQ] = useState('')
@@ -51,7 +34,6 @@ export function Professors() {
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [showAdd, setShowAdd] = useState(false)
-  const [selectedId, setSelectedId] = useState<number | null>(null)
   const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set())
   const [addForm, setAddForm] = useState({
     name: '',
@@ -122,15 +104,6 @@ export function Professors() {
     })
   }, [profs, tier, university, sortKey, sortDir])
 
-  useEffect(() => {
-    if (visible.length === 0) {
-      setSelectedId(null)
-      return
-    }
-    if (!selectedId || !visible.some((p) => p.id === selectedId)) setSelectedId(visible[0].id)
-  }, [selectedId, visible])
-
-  const selected = visible.find((p) => p.id === selectedId) ?? visible[0] ?? null
   const visibleIds = useMemo(() => visible.map((p) => p.id), [visible])
   const checkedVisibleCount = visibleIds.filter((id) => checkedIds.has(id)).length
   const allVisibleChecked = visibleIds.length > 0 && checkedVisibleCount === visibleIds.length
@@ -189,47 +162,6 @@ export function Professors() {
       setProfs((rows) => rows.map((p) => (p.id === id ? updated : p)))
     } catch (e) {
       setErr(String(e))
-    }
-  }
-
-  const scoreProfessor = async (prof: Professor) => {
-    setBusyAction(`score-${prof.id}`)
-    try {
-      const result = await api.scoreProfessor(prof.id)
-      setProfs((rows) => rows.map((p) => (
-        p.id === prof.id
-          ? { ...p, relevance_score: result.relevance_score, relevance_breakdown: result.relevance_breakdown, relevance_scored_at: new Date().toISOString() }
-          : p
-      )))
-    } catch (e) {
-      setErr(String(e))
-    } finally {
-      setBusyAction(null)
-    }
-  }
-
-  const deleteProfessor = async (prof: Professor) => {
-    const ok = await confirm({
-      title: 'Delete professor?',
-      detail: prof.name,
-      message: 'This removes the target and its related local records from the dashboard.',
-      confirmLabel: 'Delete',
-      variant: 'danger',
-    })
-    if (!ok) return
-    setBusyAction(`delete-${prof.id}`)
-    try {
-      await api.deleteProfessor(prof.id)
-      setProfs((rows) => rows.filter((p) => p.id !== prof.id))
-      setCheckedIds((ids) => {
-        const next = new Set(ids)
-        next.delete(prof.id)
-        return next
-      })
-    } catch (e) {
-      setErr(String(e))
-    } finally {
-      setBusyAction(null)
     }
   }
 
@@ -392,7 +324,7 @@ export function Professors() {
           onClear={clearFilters}
         />
 
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_318px] gap-3 items-start">
+        <div>
           <section className="rounded-md border overflow-hidden"
             style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
             <div className="px-3 py-2 border-b flex items-center justify-between gap-2"
@@ -444,9 +376,8 @@ export function Professors() {
                     <ProfessorRow
                       key={p.id}
                       p={p}
-                      selected={selected?.id === p.id}
                       checked={checkedIds.has(p.id)}
-                      onSelect={() => setSelectedId(p.id)}
+                      onOpen={() => navigate(`/professors/${p.id}`)}
                       onChecked={() => toggleChecked(p.id)}
                       onStatus={(next) => patchProfessor(p.id, { status: next })}
                     />
@@ -462,14 +393,6 @@ export function Professors() {
               </table>
             </div>
           </section>
-
-          <ProfessorPreview
-            p={selected}
-            busyAction={busyAction}
-            onStatus={(next) => selected && patchProfessor(selected.id, { status: next })}
-            onScore={scoreProfessor}
-            onDelete={deleteProfessor}
-          />
         </div>
       </div>
     </div>
@@ -671,11 +594,10 @@ function BulkToolbar({ count, busy, onStatus, onScore, onClear }: {
   )
 }
 
-function ProfessorRow({ p, selected, checked, onSelect, onChecked, onStatus }: {
+function ProfessorRow({ p, checked, onOpen, onChecked, onStatus }: {
   p: Professor
-  selected: boolean
   checked: boolean
-  onSelect: () => void
+  onOpen: () => void
   onChecked: () => void
   onStatus: (status: string) => void
 }) {
@@ -683,11 +605,20 @@ function ProfessorRow({ p, selected, checked, onSelect, onChecked, onStatus }: {
 
   return (
     <tr
-      onClick={onSelect}
-      className="border-b last:border-b-0 cursor-pointer"
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      tabIndex={0}
+      role="link"
+      aria-label={`Open details for ${p.name}`}
+      className="border-b last:border-b-0 cursor-pointer hover:bg-[color:var(--color-brand-50)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[color:var(--color-brand-600)]"
       style={{
         borderColor: 'var(--color-line)',
-        background: selected ? 'var(--color-brand-50)' : 'transparent',
+        background: 'transparent',
       }}
     >
       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
@@ -730,117 +661,6 @@ function ProfessorRow({ p, selected, checked, onSelect, onChecked, onStatus }: {
         ) : <MutedDash />}
       </td>
     </tr>
-  )
-}
-
-function ProfessorPreview({ p, busyAction, onStatus, onScore, onDelete }: {
-  p: Professor | null
-  busyAction: string | null
-  onStatus: (status: string) => void
-  onScore: (prof: Professor) => void
-  onDelete: (prof: Professor) => void
-}) {
-  if (!p) {
-    return (
-      <aside className="rounded-md border min-h-[276px] flex items-center justify-center text-center p-6"
-        style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-        <div>
-          <Users size={28} className="mx-auto" style={{ color: 'var(--color-brand-600)' }} />
-          <div className="text-[14px] font-semibold mt-3" style={{ color: 'var(--color-ink)' }}>No target selected</div>
-          <div className="text-[12px] mt-1" style={{ color: 'var(--color-muted)' }}>Adjust filters or add a professor.</div>
-        </div>
-      </aside>
-    )
-  }
-
-  return (
-    <aside className="rounded-md border overflow-hidden"
-      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-      <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
-        <div className="text-[11px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>Selected target</div>
-        <h2 className="text-[18px] leading-tight font-bold mt-1" style={{ color: 'var(--color-ink)' }}>{p.name}</h2>
-        <div className="text-[12px] mt-1" style={{ color: 'var(--color-ink-soft)' }}>
-          {[p.university, p.dept_lab].filter(Boolean).join(' - ') || 'No affiliation recorded'}
-        </div>
-      </div>
-
-      <div className="p-3 space-y-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          {p.research_category && <CatPill cat={p.research_category} />}
-          {p.tier && <SimpleBadge label={p.tier} />}
-          <StatusBadge status={p.status || 'drafting'} />
-          <ScorePill value={scoreFor(p)} />
-        </div>
-
-        <PreviewField icon={Target} label="Research angle">
-          {p.research_angle || p.research_interests || p.notes || 'No research angle recorded yet.'}
-        </PreviewField>
-
-        <div className="grid grid-cols-2 gap-2">
-          <MiniFact label="Email" value={p.email ? 'Available' : 'Missing'} tone={p.email ? 'green' : 'muted'} />
-          <MiniFact label="Hiring" value={hasHiringSignal(p) ? 'Signal' : 'Unknown'} tone={hasHiringSignal(p) ? 'green' : 'muted'} />
-        </div>
-
-        {p.hiring_notes && (
-          <div className="rounded border px-2 py-2 text-[12px] leading-relaxed"
-            style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}>
-            {p.hiring_notes}
-          </div>
-        )}
-
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.08em] mb-1" style={{ color: 'var(--color-muted)' }}>Status</div>
-          <select
-            value={p.status || 'drafting'}
-            onChange={(e) => onStatus(e.target.value)}
-            className="w-full rounded-md border px-2.5 py-1.5 text-[13px] outline-none"
-            style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }}
-          >
-            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap pt-1">
-          <Link
-            to={`/professors/${p.id}`}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-[12px] font-semibold"
-            style={{ background: 'var(--color-ink)', color: 'white' }}
-          >
-            Open detail <ArrowRight size={13} />
-          </Link>
-          <button
-            onClick={() => onScore(p)}
-            disabled={busyAction === `score-${p.id}`}
-            className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-            style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-brand-700)' }}
-          >
-            <RefreshCw size={12} className={busyAction === `score-${p.id}` ? 'animate-spin' : ''} />
-            Score
-          </button>
-          {p.email && (
-            <a
-              href={`mailto:${p.email}`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium"
-              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
-            >
-              <Mail size={12} /> Email
-            </a>
-          )}
-          {p.profile_url && <ExternalButton href={p.profile_url}>Profile</ExternalButton>}
-          {p.scholar_url && <ExternalButton href={p.scholar_url}>Scholar</ExternalButton>}
-          {p.lab_url && <ExternalButton href={p.lab_url}>Lab</ExternalButton>}
-          <button
-            onClick={() => onDelete(p)}
-            disabled={busyAction === `delete-${p.id}`}
-            className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-            style={{ background: 'var(--color-rose-50)', borderColor: 'var(--color-line-strong)', color: 'var(--color-rose-700)' }}
-          >
-            <Trash2 size={12} />
-            Delete
-          </button>
-        </div>
-      </div>
-    </aside>
   )
 }
 
@@ -962,33 +782,6 @@ function CatChip({ cat }: { cat: string }) {
   )
 }
 
-function CatPill({ cat }: { cat: string }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[12px] font-medium"
-      style={{
-        background: `color-mix(in srgb, var(--color-cat-${cat}) 10%, var(--color-white))`,
-        borderColor: `color-mix(in srgb, var(--color-cat-${cat}) 40%, var(--color-line))`,
-        color: `color-mix(in srgb, var(--color-cat-${cat}) 80%, var(--color-ink))`,
-      }}
-    >
-      <span className="w-2 h-2 rounded-full" style={{ background: `var(--color-cat-${cat})` }} />
-      {formatCategory(cat)}
-    </span>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const tone = STATUS_TONES[status] ?? STATUS_TONES.drafting
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold"
-      style={{ background: tone.bg, color: tone.fg, borderColor: tone.border }}>
-      <CheckCircle2 size={11} />
-      {status}
-    </span>
-  )
-}
-
 function ScorePill({ value }: { value: number | null }) {
   if (value === null) return <span className="font-mono text-[12px]" style={{ color: 'var(--color-muted)' }}>-</span>
   const color = value >= 75 ? 'var(--color-green-700)' : value >= 45 ? 'var(--color-amber-700)' : 'var(--color-muted)'
@@ -996,58 +789,6 @@ function ScorePill({ value }: { value: number | null }) {
     <span className="inline-flex items-center gap-1 font-mono text-[12px] font-semibold" style={{ color }}>
       {value}
     </span>
-  )
-}
-
-function SimpleBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-mono"
-      style={{ background: 'var(--color-paper)', color: 'var(--color-ink-soft)', borderColor: 'var(--color-line)' }}>
-      {label}
-    </span>
-  )
-}
-
-function PreviewField({ icon: Icon, label, children }: { icon: IconComponent; label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] mb-1"
-        style={{ color: 'var(--color-muted)' }}>
-        <Icon size={12} /> {label}
-      </div>
-      <div className="text-[12px] leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>{children}</div>
-    </div>
-  )
-}
-
-function MiniFact({ label, value, tone }: { label: string; value: string; tone: 'green' | 'muted' }) {
-  return (
-    <div className="rounded border px-2 py-1.5"
-      style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
-      <div className="text-[10px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>{label}</div>
-      <div className="text-[13px] font-semibold mt-0.5"
-        style={{ color: tone === 'green' ? 'var(--color-green-700)' : 'var(--color-ink-soft)' }}>
-        {value}
-      </div>
-    </div>
-  )
-}
-
-function ExternalButton({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener"
-      onClick={(e) => {
-        e.preventDefault()
-        openExternalUrl(href)
-      }}
-      className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium"
-      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
-    >
-      <ExternalLink size={12} /> {children}
-    </a>
   )
 }
 
@@ -1090,10 +831,4 @@ function scoreFor(p: Professor): number | null {
   const raw = p.match_score ?? p.relevance_score
   if (raw === null || raw === undefined || Number.isNaN(Number(raw))) return null
   return Math.round(Number(raw))
-}
-
-function hasHiringSignal(p: Professor): boolean {
-  if (p.hiring_notes || p.prospective_url) return true
-  if (!p.hiring_signals) return false
-  return Object.values(p.hiring_signals).some(Boolean)
 }
