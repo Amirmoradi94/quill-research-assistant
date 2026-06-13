@@ -508,14 +508,31 @@ def _discovery_profile_publication_tokens(db: Session) -> set[str]:
     return _discovery_tokens("\n".join(parts))
 
 
-def _score_discovery_paper(paper: dict[str, Any], query_tokens: set[str]) -> tuple[int, list[str]]:
+def _professor_paper_tokens(prof: models.Professor) -> set[str]:
+    text = "\n".join([
+        prof.name or "",
+        prof.dept_lab or "",
+        prof.research_angle or "",
+        prof.research_interests or "",
+        prof.last_research_summary or "",
+        prof.research_category or "",
+    ])
+    return _discovery_tokens(text)
+
+
+def _score_discovery_paper(
+    paper: dict[str, Any],
+    query_tokens: set[str],
+    professor_tokens: set[str],
+) -> tuple[int, list[str], int]:
     text = " ".join([
         str(paper.get("title") or ""),
         str(paper.get("venue") or ""),
         str(paper.get("abstract") or ""),
     ])
     paper_tokens = _discovery_tokens(text)
-    overlap = sorted(query_tokens & paper_tokens)
+    query_overlap = sorted(query_tokens & paper_tokens)
+    professor_overlap = sorted(professor_tokens & paper_tokens)
     current_year = datetime.utcnow().year
     year = paper.get("year")
     try:
@@ -523,11 +540,12 @@ def _score_discovery_paper(paper: dict[str, Any], query_tokens: set[str]) -> tup
     except Exception:
         age = 8
     recency_bonus = max(0, 20 - (age * 3))
-    lexical_score = min(80, len(overlap) * 8)
+    lexical_score = min(80, len(query_overlap) * 5 + len(professor_overlap) * 10)
     if not query_tokens:
-        lexical_score = 35
+        lexical_score = min(80, 35 + len(professor_overlap) * 10)
     score = max(0, min(100, lexical_score + recency_bonus))
-    return int(score), overlap[:6]
+    matched = sorted(set(query_overlap + professor_overlap))
+    return int(score), matched[:6], len(professor_overlap)
 
 
 def _discovery_paper_summary(paper: dict[str, Any], matched_terms: list[str]) -> str:
@@ -549,8 +567,9 @@ async def _save_discovery_professor_papers(db: Session, prof: models.Professor, 
     if not papers:
         return
 
+    professor_tokens = _professor_paper_tokens(prof)
     seen_titles: set[str] = set()
-    scored: list[tuple[int, int, dict[str, Any], list[str]]] = []
+    scored: list[tuple[int, int, dict[str, Any], list[str], int]] = []
     for paper in papers:
         if not paper.get("title"):
             continue
@@ -558,22 +577,25 @@ async def _save_discovery_professor_papers(db: Session, prof: models.Professor, 
         if title_key in seen_titles:
             continue
         seen_titles.add(title_key)
-        score, matched = _score_discovery_paper(paper, query_tokens)
+        score, matched, professor_overlap_count = _score_discovery_paper(paper, query_tokens, professor_tokens)
         year = paper.get("year") or 0
-        scored.append((score, int(year) if isinstance(year, int) else 0, paper, matched))
+        scored.append((score, int(year) if isinstance(year, int) else 0, paper, matched, professor_overlap_count))
 
     if not scored:
         return
 
     ranked = sorted(scored, key=lambda row: (row[0], row[1]), reverse=True)
-    selected = [row for row in ranked if row[0] >= 45][:5]
+    verified = [row for row in ranked if row[4] >= 2]
+    selected = [row for row in verified if row[0] >= 45][:5]
     for row in ranked:
         if len(selected) >= min(5, len(ranked)):
             break
-        if row not in selected:
+        if row in selected or row[4] < 2:
+            continue
+        if not selected or len(selected) < 3:
             selected.append(row)
 
-    for score, _year, paper, matched in selected:
+    for score, _year, paper, matched, _professor_overlap_count in selected:
         db.add(models.ProfessorPaper(
             professor_id=prof.id,
             title=paper["title"],

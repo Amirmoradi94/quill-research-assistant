@@ -9,6 +9,7 @@ to Claude's built-in WebFetch in that case.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
