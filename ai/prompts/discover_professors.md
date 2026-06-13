@@ -110,18 +110,30 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
       "name": "...",
       "university": "...",
       "country": "...",
+      "dept_lab": "... or null",
+      "email": "... or null",
       "profile_url": "... or null",
+      "lab_url": "... or null",
+      "scholar_url": "... or null",
       "research_angle": "1–2 sentences: what they work on and exactly why it matches this applicant",
+      "research_summary": "2–3 sentences with the strongest concrete facts found on the profile/lab page",
       "research_category": "primary category keyword (lowercase, short)",
       "position_type": "{{ position_type or 'phd' }}",
       "match_score": 85,
-      "hiring_signals": true
+      "hiring_signals": true,
+      "hiring_notes": "1–3 short bullets or null",
+      "prospective_url": "... or null",
+      "contact_instructions": "... or null"
     }
   ]
 }
 
 Field notes:
 - `country`: the country where the university is located; required when target countries / regions are provided
+- `dept_lab`: department, lab, or research group if visible
+- `email`: direct professor email if visible; null if not found quickly
+- `research_summary`: factual summary from the profile/lab page, not generic field knowledge
 - `match_score` 0–100: how well research aligns with the applicant's profile
 - `hiring_signals`: true = clearly accepting students, false = closed, null = unclear
+- Keep discovery lightweight. Do not do a full publication review here; the separate Research workflow will deep-scrape papers and contact guidance.
 - Sort by match_score descending

@@ -573,17 +573,29 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
             )
             if existing:
                 continue
+            position_type = p.get("position_type") or request.params.get("position_type") or "phd"
+            hiring_signal = p.get("hiring_signals")
             prof = models.Professor(
                 name=str(p["name"]).strip(),
                 university=str(p["university"]).strip(),
+                dept_lab=p.get("dept_lab") or "",
+                email=p.get("email") or "",
                 profile_url=p.get("profile_url"),
+                lab_url=p.get("lab_url"),
+                scholar_url=p.get("scholar_url"),
                 research_angle=p.get("research_angle"),
+                research_interests=p.get("research_summary") or "",
+                last_research_summary=p.get("research_summary"),
                 research_category=p.get("research_category", ""),
                 match_score=p.get("match_score"),
-                position_type=p.get("position_type", "phd"),
+                position_type=position_type,
                 is_suggested=True,
                 status="drafting",
-                hiring_signals={"phd": p.get("hiring_signals")} if p.get("hiring_signals") is not None else None,
+                source="discovery",
+                hiring_signals={position_type: hiring_signal} if hiring_signal is not None else None,
+                hiring_notes=p.get("hiring_notes"),
+                prospective_url=p.get("prospective_url"),
+                contact_instructions=p.get("contact_instructions"),
             )
             db.add(prof)
         db.commit()

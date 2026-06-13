@@ -1040,6 +1040,9 @@ function CandidatePreview({ p, onAccept, onDismiss, onResearch, researching }: {
 
       <div className="p-4 flex flex-col gap-4">
         <EvidenceBlock title="Research angle" text={extra.research_angle || p.research_interests || 'No research angle captured yet.'} />
+        {extra.last_research_summary && (
+          <EvidenceBlock title="Profile summary" text={extra.last_research_summary} />
+        )}
         <EvidenceBlock title="Hiring evidence" text={hiringNotes || 'No explicit hiring evidence captured yet.'} />
         {extra.relevance_breakdown && (
           <EvidenceBlock title="Why matched" text={summarizeBreakdown(extra.relevance_breakdown)} />
