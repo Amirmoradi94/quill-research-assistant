@@ -2,21 +2,28 @@
 
 Strategy:
   - mode="auto"  → try AsyncFetcher (fast, stateless); if content is thin
-                   (< MIN_TEXT_LEN chars), retry with DynamicFetcher (Playwright).
+                   (< MIN_TEXT_LEN chars), retry with the installed Playwright fetcher.
   - mode="fast"  → AsyncFetcher only, no fallback.
-  - mode="js"    → DynamicFetcher always (full Chromium render).
+  - mode="js"    → Playwright fetcher always (full Chromium render).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
+from typing import List, Literal, Optional
 from urllib.parse import urljoin, urlparse
 
 import html2text
 from fastapi import FastAPI
 from pydantic import BaseModel
-from scrapling.fetchers import AsyncFetcher, DynamicFetcher
+from scrapling.fetchers import AsyncFetcher
+
+try:
+    from scrapling.fetchers import DynamicFetcher as BrowserFetcher
+    _BROWSER_FETCHER_NAME = "dynamic"
+except ImportError:
+    from scrapling.fetchers import PlayWrightFetcher as BrowserFetcher
+    _BROWSER_FETCHER_NAME = "playwright"
 
 log = logging.getLogger("scraper")
 logging.basicConfig(level=logging.INFO)
@@ -44,17 +51,17 @@ class LinkItem(BaseModel):
 
 class ScrapeResponse(BaseModel):
     url: str
-    final_url: str | None = None
+    final_url: Optional[str] = None
     text: str = ""
     markdown: str = ""
-    links: list[LinkItem] = []
-    status_code: int | None = None
+    links: List[LinkItem] = []
+    status_code: Optional[int] = None
     fetcher_used: str = ""
-    error: str | None = None
+    error: Optional[str] = None
 
 
 class BatchRequest(BaseModel):
-    urls: list[str]
+    urls: List[str]
     mode: Literal["auto", "fast", "js"] = "auto"
 
 
@@ -80,7 +87,7 @@ def _page_to_response(url: str, page, fetcher_used: str) -> ScrapeResponse:
 
     markdown = _h2t.handle(raw_html) if raw_html else text
 
-    links: list[LinkItem] = []
+    links: List[LinkItem] = []
     try:
         base = url
         for a in page.css("a[href]"):
@@ -117,19 +124,19 @@ def _page_to_response(url: str, page, fetcher_used: str) -> ScrapeResponse:
 
 
 async def _fetch_dynamic(url: str) -> tuple[object, str]:
-    """Run DynamicFetcher (sync Playwright) in a thread pool.
+    """Run the installed Playwright fetcher in a thread pool.
 
     The semaphore caps concurrent Chromium instances to prevent OOM and the
     connection-drop errors observed under high concurrency.
     """
     async with _PLAYWRIGHT_SEM:
         page = await asyncio.to_thread(
-            DynamicFetcher.fetch,
+            BrowserFetcher.fetch,
             url,
             disable_resources=True,  # skip images/fonts — much faster
             headless=True,
         )
-    return page, "dynamic"
+    return page, _BROWSER_FETCHER_NAME
 
 
 async def _fetch_async(url: str) -> tuple[object, str]:
@@ -153,7 +160,10 @@ async def _scrape_one(url: str, mode: str) -> ScrapeResponse:
                 pass
             if len(text_preview.strip()) < MIN_TEXT_LEN:
                 log.info("Content thin (%d chars) for %s — retrying with Playwright", len(text_preview), url)
-                page, fetcher = await _fetch_dynamic(url)
+                try:
+                    page, fetcher = await _fetch_dynamic(url)
+                except Exception as exc:
+                    log.warning("Playwright retry failed for %s: %s — keeping async Scrapling result", url, exc)
 
         return _page_to_response(url, page, fetcher)
 
@@ -174,7 +184,7 @@ async def scrape(req: ScrapeRequest) -> ScrapeResponse:
     return await _scrape_one(req.url, req.mode)
 
 
-@app.post("/scrape/batch", response_model=list[ScrapeResponse])
-async def scrape_batch(req: BatchRequest) -> list[ScrapeResponse]:
+@app.post("/scrape/batch", response_model=List[ScrapeResponse])
+async def scrape_batch(req: BatchRequest) -> List[ScrapeResponse]:
     tasks = [_scrape_one(url, req.mode) for url in req.urls]
     return list(await asyncio.gather(*tasks))

@@ -29,7 +29,8 @@
       "icons/icon.png"
     ],
     "externalBin": [
-      "binaries/postdoc-backend"
+      "binaries/postdoc-backend",
+      "binaries/postdoc-scraper"
     ]
   }
 }
