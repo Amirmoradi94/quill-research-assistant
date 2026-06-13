@@ -704,49 +704,127 @@ function Toggle({ checked, onChange, label }: {
 function RunStatus({ quill, suggestionCount, mode }: {
   quill: ReturnType<typeof useQuillRun>; suggestionCount: number; mode: 'discover' | 'research' | null
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [showLog, setShowLog] = useState(true)
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (quill.state !== 'running') return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [quill.state])
+
   if (quill.state === 'idle') return null
+  const elapsedMs = (quill.endedAt ?? now) - (quill.startedAt ?? now)
+  const elapsed = Math.max(0, Math.round(elapsedMs / 1000))
+  const parsed = quill.events.some((evt) => evt.kind === 'parsed')
+  const providerStarted = quill.events.some((evt) => evt.kind === 'started')
+  const title = mode === 'research' ? 'Research monitor' : 'Discovery monitor'
+  const activeText = mode === 'research'
+    ? 'Researching the selected candidate'
+    : 'Searching, scoring, and preparing candidate suggestions'
+  const steps = [
+    { label: 'Create run', done: !!quill.runId, active: quill.state === 'running' && !quill.runId },
+    { label: 'Start AI provider', done: providerStarted || quill.state === 'done', active: quill.state === 'running' && !!quill.runId && !providerStarted },
+    { label: mode === 'research' ? 'Research candidate' : 'Search and score candidates', done: parsed || quill.state === 'done', active: quill.state === 'running' && providerStarted && !parsed },
+    { label: 'Parse structured result', done: parsed || quill.state === 'done', active: quill.state === 'running' && providerStarted && !parsed },
+    { label: mode === 'research' ? 'Update candidate profile' : 'Save ranked queue', done: quill.state === 'done', active: quill.state === 'running' && parsed },
+  ]
+
   return (
     <div className="rounded-md border px-4 py-3 mb-5"
       style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
-      {quill.state === 'running' && (
-        <>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[13px]" style={{ color: 'var(--color-brand-600)' }}>
-              <Loader size={13} className="animate-spin" />
-              <span>{mode === 'research' ? 'Researching selected candidate…' : 'Searching for matching faculty…'}</span>
-            </div>
-            <button onClick={() => setExpanded(!expanded)} style={{ color: 'var(--color-muted)' }}>
-              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {quill.state === 'running' && <Loader size={14} className="animate-spin" style={{ color: 'var(--color-brand-600)' }} />}
+            {quill.state === 'done' && <Check size={14} style={{ color: 'var(--color-green-700)' }} />}
+            {quill.state === 'error' && <AlertCircle size={14} style={{ color: 'var(--color-rose-700)' }} />}
+            <h2 className="text-[14px] font-bold" style={{ color: 'var(--color-ink)' }}>{title}</h2>
+            {quill.runId && (
+              <span className="rounded border px-1.5 py-0.5 font-mono text-[10px]"
+                style={{ borderColor: 'var(--color-line)', color: 'var(--color-muted)', background: 'var(--color-paper)' }}>
+                run #{quill.runId}
+              </span>
+            )}
           </div>
-          {expanded && quill.logText && (
-            <pre className="text-[11px] max-h-48 overflow-auto whitespace-pre-wrap font-mono mt-2 p-2 rounded"
-              style={{ background: 'var(--color-paper-2)', color: 'var(--color-ink-soft)' }}>
-              {quill.logText}
-            </pre>
-          )}
-        </>
-      )}
-      {quill.state === 'done' && (
-        <div className="flex items-center justify-between text-[13px]">
-          <span style={{ color: 'var(--color-green-700)' }}>
-            Done — {suggestionCount} suggestion{suggestionCount !== 1 ? 's' : ''} ready
-          </span>
-          <button onClick={quill.reset} className="flex items-center gap-1 text-[12px]"
-            style={{ color: 'var(--color-muted)' }}>
+          <div className="mt-1 text-[12px]" style={{ color: 'var(--color-muted)' }}>
+            {quill.state === 'running'
+              ? `${activeText} · ${elapsed}s elapsed`
+              : quill.state === 'done'
+                ? `Done in ${elapsed}s · ${suggestionCount} suggestion${suggestionCount !== 1 ? 's' : ''} ready`
+                : quill.error}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowLog(!showLog)} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px]"
+            style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper-2)', color: 'var(--color-ink-soft)' }}>
+            {showLog ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            {showLog ? 'Hide log' : 'Show log'}
+          </button>
+          <button onClick={quill.reset} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px]"
+            style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper-2)', color: 'var(--color-muted)' }}>
             <RefreshCw size={11} /> Clear
           </button>
         </div>
-      )}
-      {quill.state === 'error' && (
-        <div className="flex items-center justify-between text-[13px]">
-          <div className="flex items-center gap-1.5" style={{ color: 'var(--color-rose-700)' }}>
-            <AlertCircle size={13} /><span>{quill.error}</span>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-5">
+        {steps.map((step) => (
+          <div key={step.label} className="rounded border px-2 py-2"
+            style={{
+              borderColor: step.done ? 'var(--color-green-200)' : step.active ? 'var(--color-brand-400)' : 'var(--color-line)',
+              background: step.done ? 'var(--color-green-50)' : step.active ? 'var(--color-brand-50)' : 'var(--color-paper)',
+            }}>
+            <div className="flex items-center gap-1.5">
+              {step.done
+                ? <Check size={12} style={{ color: 'var(--color-green-700)' }} />
+                : step.active
+                  ? <Loader size={12} className="animate-spin" style={{ color: 'var(--color-brand-600)' }} />
+                  : <CircleDot size={12} style={{ color: 'var(--color-muted)' }} />}
+              <span className="text-[11px] font-semibold" style={{ color: step.done ? 'var(--color-green-700)' : step.active ? 'var(--color-brand-700)' : 'var(--color-muted)' }}>
+                {step.label}
+              </span>
+            </div>
           </div>
-          <button onClick={quill.reset} className="text-[12px]" style={{ color: 'var(--color-muted)' }}>
-            Dismiss
-          </button>
+        ))}
+      </div>
+
+      {showLog && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="rounded border p-3" style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>
+              Event timeline
+            </div>
+            <div className="max-h-56 overflow-auto pr-1">
+              {quill.events.length === 0 && (
+                <div className="text-[12px]" style={{ color: 'var(--color-muted)' }}>Waiting for the first backend event…</div>
+              )}
+              {quill.events.map((evt) => (
+                <div key={evt.id} className="border-l pl-2 pb-2 last:pb-0"
+                  style={{ borderColor: 'var(--color-line)' }}>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--color-muted)' }}>
+                      {new Date(evt.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    <span className="text-[12px] font-medium" style={{ color: 'var(--color-ink)' }}>{evt.label}</span>
+                  </div>
+                  {evt.detail && (
+                    <div className="mt-0.5 line-clamp-2 text-[11px]" style={{ color: 'var(--color-muted)' }}>{evt.detail}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded border p-3" style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>
+              Live stream
+            </div>
+            <pre className="min-h-28 max-h-56 overflow-auto whitespace-pre-wrap rounded p-2 font-mono text-[11px]"
+              style={{ background: 'var(--color-ink)', color: '#d4e4ff' }}>
+              {quill.logText || (quill.state === 'running' ? 'Waiting for provider output…' : 'No provider text captured.')}
+            </pre>
+          </div>
         </div>
       )}
     </div>
