@@ -114,7 +114,7 @@ export function Profile() {
       <div className="w-[320px] max-w-full min-w-0 overflow-hidden sm:w-full">
         <Hero data={data} err={err} onPatch={patch} onOpenExtract={() => setExtractOpen(true)} />
 
-        <nav className="mb-2 rounded-md border px-2 py-1.5 flex items-center gap-1 overflow-x-auto text-[11px]"
+        <nav className="mb-2 rounded-md border px-2 py-1.5 flex items-center gap-1 overflow-x-auto text-[12px]"
           style={{ background: 'color-mix(in srgb, var(--color-white) 94%, var(--color-paper))', borderColor: 'var(--color-line-strong)' }}>
           {SECTIONS.map((s) => {
             const Icon = s.icon
