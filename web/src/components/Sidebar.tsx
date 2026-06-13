@@ -51,10 +51,12 @@ export function Sidebar({ user }: { user: { name: string; email: string | null }
           <img src={quillLogoMark} alt="" className="h-8 w-8 object-contain" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-[15px] truncate">Quill Research Assistant</div>
-          <div className="text-[12px] truncate" style={{ color: 'var(--color-muted)' }}>
-            {user.email || 'self-hosted'}
-          </div>
+          <div className="font-semibold text-[15px] truncate">Quill AI</div>
+          {user.email && (
+            <div className="text-[12px] truncate" style={{ color: 'var(--color-muted)' }}>
+              {user.email}
+            </div>
+          )}
         </div>
       </div>
 

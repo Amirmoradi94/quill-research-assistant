@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Quill Research Assistant",
+  "productName": "Quill AI",
   "version": "0.1.0",
   "identifier": "local.quill.researchassistant",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Quill Research Assistant",
+        "title": "Quill AI",
         "width": 1440,
         "height": 940,
         "minWidth": 1100,

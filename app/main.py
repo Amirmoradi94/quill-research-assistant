@@ -49,7 +49,7 @@ _ensure_ai_run_recovery_columns()
 if not is_desktop_mode() or os.environ.get("POSTDOC_SEED_APPLICATIONS", "").lower() in {"1", "true", "yes"}:
     seed_if_empty()
 
-app = FastAPI(title="Quill Research Assistant", version="1.0.0")
+app = FastAPI(title="Quill AI", version="1.0.0")
 app.include_router(quill_router)
 app.include_router(documents_router)
 app.include_router(user_router)

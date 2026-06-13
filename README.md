@@ -1,6 +1,6 @@
-# Quill Research Assistant
+# Quill AI
 
-Quill Research Assistant is a local-first desktop app for graduate students and
+Quill AI is a local-first desktop app for graduate students and
 early-career researchers managing professor discovery, research-position
 outreach drafts, documents, grants, interviews, and follow-ups.
 
@@ -13,7 +13,7 @@ The intended install path is:
 
 1. Open the project **Releases** page on GitHub.
 2. Download the installer for your operating system.
-3. Open **Quill Research Assistant**.
+3. Open **Quill AI**.
 4. Follow the in-app setup checklist.
 5. Choose Claude or Codex for Quill, the built-in research assistant.
 
@@ -87,6 +87,9 @@ Desktop mode stores data in the operating system app-data folder:
 - macOS: `~/Library/Application Support/QuillResearchAssistant`
 - Windows: `%APPDATA%/QuillResearchAssistant`
 - Linux: `$XDG_DATA_HOME/QuillResearchAssistant` or `~/.local/share/QuillResearchAssistant`
+
+The internal `QuillResearchAssistant` storage folder name is kept stable so
+existing desktop installs can continue to find their local data.
 
 Existing desktop installs that already have a `PostdocDashboard` data folder
 continue to use it for compatibility.
