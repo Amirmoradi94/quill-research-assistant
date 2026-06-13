@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Literal
 from urllib.parse import urljoin, urlparse
 
@@ -58,6 +59,86 @@ class ScrapeResult:
     @property
     def ok(self) -> bool:
         return bool(self.text or self.markdown) and not self.error
+
+
+class _SimplePageParser(HTMLParser):
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.parts: list[str] = []
+        self.links: list[dict] = []
+        self._skip_depth = 0
+        self._current_href: str | None = None
+        self._current_link_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "noscript", "svg"}:
+            self._skip_depth += 1
+            return
+        if self._skip_depth:
+            return
+        attrs_dict = {k.lower(): v for k, v in attrs if v}
+        if tag == "a" and attrs_dict.get("href"):
+            self._current_href = urljoin(self.base_url, attrs_dict["href"])
+            self._current_link_text = []
+        if tag in {"p", "div", "section", "article", "header", "footer", "li", "br", "h1", "h2", "h3", "h4"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"script", "style", "noscript", "svg"} and self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if self._skip_depth:
+            return
+        if tag == "a" and self._current_href:
+            text = " ".join("".join(self._current_link_text).split())
+            self.links.append({"href": self._current_href, "text": text})
+            self._current_href = None
+            self._current_link_text = []
+        if tag in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "h4"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        if self._current_href:
+            self._current_link_text.append(data)
+        self.parts.append(data)
+
+    def text(self) -> str:
+        lines = [" ".join(line.split()) for line in "".join(self.parts).splitlines()]
+        return "\n".join(line for line in lines if line)
+
+
+async def _direct_scrape(url: str) -> ScrapeResult | None:
+    """Best-effort static HTML fallback for desktop when Scrapling is absent."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            follow_redirects=True,
+            headers={"User-Agent": "QuillAI/0.1 academic-discovery"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" not in content_type and "application/xhtml" not in content_type:
+            return None
+        parser = _SimplePageParser(str(resp.url))
+        parser.feed(resp.text)
+        text = parser.text()
+        return ScrapeResult(
+            url=url,
+            final_url=str(resp.url),
+            text=text,
+            markdown=text,
+            links=parser.links,
+            fetcher_used="httpx",
+        )
+    except Exception as exc:
+        log.warning("Direct scrape failed (%s: %s): %s", type(exc).__name__, exc or "(no message)", url)
+        return None
 
 
 def _filter_evidence_links(
@@ -140,9 +221,9 @@ async def scrape(url: str, mode: Literal["auto", "fast", "js"] = "auto") -> Scra
                 error=d.get("error"),
             )
     except Exception as exc:
-        log.warning("Scraper unavailable (%s: %s) — will rely on WebFetch",
+        log.warning("Scraper unavailable (%s: %s) — falling back to direct HTTP fetch",
                     type(exc).__name__, exc or "(no message)")
-        return None
+        return await _direct_scrape(url)
 
 
 async def scrape_batch(
@@ -171,9 +252,9 @@ async def scrape_batch(
                 for d in resp.json()
             ]
     except Exception as exc:
-        log.warning("Scraper batch unavailable (%s: %s) — will rely on WebFetch",
+        log.warning("Scraper batch unavailable (%s: %s) — falling back to direct HTTP fetches",
                     type(exc).__name__, exc or "(no message)")
-        return [None] * len(urls)
+        return await asyncio.gather(*(_direct_scrape(url) for url in urls))
 
 
 async def prescrape_professor(
@@ -194,6 +275,9 @@ async def prescrape_professor(
         return {"scraped_main": main, "scraped_subpages": []}
 
     evidence_urls = _filter_evidence_links(profile_url, main.links, lab_url)
+    if lab_url and lab_url.rstrip("/") != profile_url.rstrip("/"):
+        lab_abs = urljoin(profile_url, lab_url)
+        evidence_urls = [lab_abs] + [u for u in evidence_urls if u.rstrip("/") != lab_abs.rstrip("/")]
     subpages: list[ScrapeResult | None] = []
     if evidence_urls:
         subpages = await scrape_batch(evidence_urls[:8])  # cap to keep prompts bounded

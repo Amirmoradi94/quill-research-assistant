@@ -588,6 +588,173 @@ async def _save_discovery_professor_papers(db: Session, prof: models.Professor, 
         ))
 
 
+_HIRING_LINE_RE = re.compile(
+    r"\b(postdoc|post-doctor|phd|doctoral|master|msc|graduate|student|hiring|"
+    r"opening|position|opportunit|join|recruit|apply|prospective|funded|funding|"
+    r"vacancy|fellowship)\b",
+    re.IGNORECASE,
+)
+_CONTACT_LINE_RE = re.compile(r"\b(email|contact|apply|send|cv|transcript|statement)\b", re.IGNORECASE)
+
+
+def _scraped_page_text(page: Any) -> str:
+    if not page:
+        return ""
+    return str(getattr(page, "markdown", None) or getattr(page, "text", None) or "")
+
+
+def _scraped_evidence_text(scraped: dict[str, Any]) -> str:
+    from .text_cleaner import clean_scraped_text
+
+    pages = [scraped.get("scraped_main"), *(scraped.get("scraped_subpages") or [])]
+    chunks: list[str] = []
+    for page in pages:
+        raw = _scraped_page_text(page)
+        cleaned = clean_scraped_text(raw)
+        if cleaned:
+            url = getattr(page, "final_url", None) or getattr(page, "url", None) or ""
+            chunks.append(f"{url}\n{cleaned}" if url else cleaned)
+    return "\n\n".join(chunks)
+
+
+def _name_evidence_score(name: str, evidence_text: str) -> int:
+    tokens = [t for t in re.findall(r"[a-z]{2,}", (name or "").lower()) if t not in {"dr", "prof", "professor"}]
+    evidence = (evidence_text or "").lower()
+    if not tokens or not evidence:
+        return 0
+    score = 0
+    if all(t in evidence for t in tokens):
+        score += 2
+    if tokens[-1] in evidence:
+        score += 1
+    return score
+
+
+def _research_evidence_score(candidate: dict[str, Any], query_tokens: set[str], evidence_text: str) -> int:
+    candidate_text = " ".join(str(candidate.get(k) or "") for k in (
+        "research_angle",
+        "research_summary",
+        "research_category",
+        "dept_lab",
+    ))
+    candidate_tokens = _discovery_tokens(candidate_text)
+    evidence_tokens = _discovery_tokens(evidence_text)
+    if not evidence_tokens:
+        return 0
+    score = 0
+    if candidate_tokens & evidence_tokens:
+        score += min(4, len(candidate_tokens & evidence_tokens))
+    if query_tokens & evidence_tokens:
+        score += min(4, len(query_tokens & evidence_tokens))
+    return score
+
+
+def _best_lines(evidence_text: str, pattern: re.Pattern[str], limit: int = 5) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in evidence_text.splitlines():
+        line = " ".join(raw.split())
+        if len(line) < 35 or len(line) > 320:
+            continue
+        if not pattern.search(line):
+            continue
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _summary_lines(evidence_text: str, query_tokens: set[str], limit: int = 5) -> list[str]:
+    scored: list[tuple[int, str]] = []
+    for raw in evidence_text.splitlines():
+        line = " ".join(raw.split())
+        if len(line) < 60 or len(line) > 340:
+            continue
+        tokens = _discovery_tokens(line)
+        score = len(tokens & query_tokens)
+        if score:
+            scored.append((score, line))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for _score, line in scored:
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+async def _verify_discovery_candidate(candidate: dict[str, Any], query_tokens: set[str]) -> dict[str, Any] | None:
+    """Scrape profile/lab pages after discovery and return enriched candidate data.
+
+    Returns:
+      - enriched dict when backend evidence exists or the local scraper is unavailable.
+      - None when URLs are present but the pages do not contain usable identity/research evidence.
+    """
+    profile_url = str(candidate.get("profile_url") or "").strip()
+    lab_url = str(candidate.get("lab_url") or "").strip()
+    if not profile_url and not lab_url:
+        return None
+
+    from .scraper_client import prescrape_professor, scrape
+
+    if profile_url:
+        scraped = await prescrape_professor(profile_url, lab_url or None)
+    else:
+        lab_page = await scrape(lab_url)
+        scraped = {"scraped_main": lab_page, "scraped_subpages": []}
+
+    main = scraped.get("scraped_main")
+    subpages = scraped.get("scraped_subpages") or []
+    pages = [p for p in [main, *subpages] if p and getattr(p, "ok", False)]
+    if not pages:
+        return {**candidate, "profile_scraped_at": None}
+
+    evidence_text = _scraped_evidence_text(scraped)
+    if len(evidence_text) < 250:
+        return None
+
+    name_score = _name_evidence_score(str(candidate.get("name") or ""), evidence_text)
+    research_score = _research_evidence_score(candidate, query_tokens, evidence_text)
+    if name_score == 0 and research_score < 2:
+        return None
+
+    enriched = dict(candidate)
+    enriched["profile_scraped_at"] = datetime.utcnow()
+    if not enriched.get("research_summary"):
+        summary_lines = _summary_lines(evidence_text, query_tokens, limit=3)
+        if summary_lines:
+            enriched["research_summary"] = " ".join(summary_lines)[:1200]
+    else:
+        summary_lines = _summary_lines(evidence_text, query_tokens, limit=2)
+        if summary_lines:
+            enriched["research_summary"] = f"{enriched['research_summary']}\n\nVerified page evidence: " + " ".join(summary_lines)[:900]
+
+    if not enriched.get("hiring_notes"):
+        hiring_lines = _best_lines(evidence_text, _HIRING_LINE_RE, limit=5)
+        if hiring_lines:
+            enriched["hiring_notes"] = "\n".join(f"- {line}" for line in hiring_lines)
+    if not enriched.get("contact_instructions"):
+        contact_lines = _best_lines(evidence_text, _CONTACT_LINE_RE, limit=2)
+        if contact_lines:
+            enriched["contact_instructions"] = " ".join(contact_lines)
+    if not enriched.get("lab_url"):
+        for page in subpages:
+            page_url = getattr(page, "final_url", None) or getattr(page, "url", None) or ""
+            if re.search(r"(lab|group|research)", page_url, re.IGNORECASE):
+                enriched["lab_url"] = page_url
+                break
+    return enriched
+
+
 # ───────────────────────────────────────────────────────────────────
 # Post-run result application
 # ───────────────────────────────────────────────────────────────────
@@ -710,6 +877,10 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
                 continue
             if allowed_countries and not _country_matches_filter(p.get("country"), allowed_countries):
                 continue
+            verified = await _verify_discovery_candidate(p, query_tokens)
+            if verified is None:
+                continue
+            p = verified
             existing = (
                 db.query(models.Professor.id)
                 .filter(func.lower(models.Professor.name) == str(p["name"]).strip().lower())
@@ -741,6 +912,7 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
                 hiring_notes=p.get("hiring_notes"),
                 prospective_url=p.get("prospective_url"),
                 contact_instructions=p.get("contact_instructions"),
+                profile_scraped_at=p.get("profile_scraped_at"),
             )
             db.add(prof)
             db.flush()
