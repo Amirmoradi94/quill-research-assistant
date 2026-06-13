@@ -22,12 +22,26 @@ log = logging.getLogger("scraper_client")
 SCRAPER_URL = os.environ.get("SCRAPER_URL", "http://localhost:8001")
 _TIMEOUT = httpx.Timeout(90.0)  # Playwright renders can be slow
 
-# Keywords that suggest a sub-page is a hiring/prospective-students page
+# Keywords that suggest a sub-page is a hiring/prospective-students page.
 _HIRING_KEYWORDS = frozenset({
     "prospective", "join", "opening", "position", "opportunit",
     "apply", "phd", "postdoc", "graduate", "student", "hiring",
     "recruit", "master", "vacancy", "fellowship", "opportunity",
     "future", "work-with", "work_with", "how-to-apply",
+})
+
+# Keywords that suggest a sub-page has useful research evidence.
+_RESEARCH_KEYWORDS = frozenset({
+    "research", "lab", "group", "publication", "paper", "project",
+    "people", "team", "student", "member", "contact", "profile",
+    "supervision", "graduate", "prospective", "join", "opening",
+    "position", "hiring", "opportunit", "postdoc", "phd", "master",
+})
+
+_SKIP_LINK_KEYWORDS = frozenset({
+    "login", "privacy", "accessibility", "calendar", "event", "news",
+    "media", "alumni", "donate", "map", "parking", "library",
+    "directory", "admission", "tuition", "program", "course",
 })
 
 
@@ -46,25 +60,21 @@ class ScrapeResult:
         return bool(self.text or self.markdown) and not self.error
 
 
-def _filter_hiring_links(
+def _filter_evidence_links(
     profile_url: str,
     links: list[dict],
     lab_url: str | None = None,
 ) -> list[str]:
-    """Return absolute URLs from `links` that look like hiring/openings sub-pages.
+    """Return same-domain URLs likely to help deep professor research.
 
     Filtering rules:
     1. Must be on the same domain as `profile_url` OR `lab_url`.
-    2. Must contain a hiring keyword in the URL path OR the link anchor text.
+    2. Must contain a research or hiring keyword in the URL path or anchor text.
     3. Must not be exactly equal to `profile_url` (avoid re-scraping main page).
-    4. For the professor's primary domain: if the link is NOT a sub-path of their
-       profile URL, it still passes IF a keyword is present (e.g. /~prof/students/).
-       Links to unrelated paths on the same university server are filtered out unless
-       a keyword is present.
+    4. Hiring-looking URLs are ranked first, then lab/research/publication pages.
     """
     parsed_profile = urlparse(profile_url)
     profile_domain = parsed_profile.netloc
-    profile_path = parsed_profile.path.rstrip("/")
 
     allowed_domains: set[str] = {profile_domain}
     if lab_url:
@@ -73,12 +83,13 @@ def _filter_hiring_links(
             allowed_domains.add(lab_domain)
 
     seen: set[str] = set()
-    result: list[str] = []
+    scored: list[tuple[int, str]] = []
 
     for link in links:
         href = (link.get("href") or "").strip()
         if not href:
             continue
+        href = urljoin(profile_url, href)
 
         parsed = urlparse(href)
         if parsed.netloc not in allowed_domains:
@@ -90,16 +101,27 @@ def _filter_hiring_links(
 
         url_lower = href.lower()
         text_lower = (link.get("text") or "").lower()
-        has_keyword = any(kw in url_lower or kw in text_lower for kw in _HIRING_KEYWORDS)
+        combined = f"{url_lower} {text_lower}"
+        if any(kw in combined for kw in _SKIP_LINK_KEYWORDS):
+            continue
 
-        if not has_keyword:
+        is_hiring = any(kw in combined for kw in _HIRING_KEYWORDS)
+        is_research = any(kw in combined for kw in _RESEARCH_KEYWORDS)
+
+        if not is_hiring and not is_research:
             continue
 
         if href not in seen:
             seen.add(href)
-            result.append(href)
+            score = 100 if is_hiring else 0
+            if any(kw in combined for kw in ("lab", "group", "research", "publication", "paper", "project")):
+                score += 40
+            if any(kw in combined for kw in ("people", "team", "student", "member", "contact")):
+                score += 20
+            scored.append((score, href))
 
-    return result
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [href for _, href in scored]
 
 
 async def scrape(url: str, mode: Literal["auto", "fast", "js"] = "auto") -> ScrapeResult | None:
@@ -158,11 +180,11 @@ async def prescrape_professor(
     profile_url: str,
     lab_url: str | None = None,
 ) -> dict:
-    """Scrape a professor's profile and any hiring sub-pages.
+    """Scrape a professor's profile and high-value evidence sub-pages.
 
     Returns a dict ready to merge into prompt params:
       scraped_main       - ScrapeResult of the main profile page (or None)
-      scraped_subpages   - list[ScrapeResult] of hiring/openings sub-pages
+      scraped_subpages   - list[ScrapeResult] of lab/research/hiring sub-pages
     """
     if not profile_url:
         return {"scraped_main": None, "scraped_subpages": []}
@@ -171,10 +193,10 @@ async def prescrape_professor(
     if not main or not main.ok:
         return {"scraped_main": main, "scraped_subpages": []}
 
-    hiring_urls = _filter_hiring_links(profile_url, main.links, lab_url)
+    evidence_urls = _filter_evidence_links(profile_url, main.links, lab_url)
     subpages: list[ScrapeResult | None] = []
-    if hiring_urls:
-        subpages = await scrape_batch(hiring_urls[:5])  # cap at 5 sub-pages
+    if evidence_urls:
+        subpages = await scrape_batch(evidence_urls[:8])  # cap to keep prompts bounded
 
     return {
         "scraped_main": main,

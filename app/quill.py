@@ -879,7 +879,7 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
                 scraped = await prescrape_professor(profile_url, lab_url)
                 request.params.update(scraped)
                 sub_count = len(scraped.get("scraped_subpages") or [])
-                done_evt = StreamEvent(kind="text", data={"text": f"[Scraper] Done — main page + {sub_count} sub-page(s) scraped.\n\n"})
+                done_evt = StreamEvent(kind="text", data={"text": f"[Scraper] Done - main page + {sub_count} evidence page(s) scraped.\n\n"})
                 yield done_evt.to_sse().encode()
 
             s2_papers = await s2_task

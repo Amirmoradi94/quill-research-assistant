@@ -5,7 +5,8 @@
 
    The backend pre-scrapes using the Scrapling service and injects:
      scraped_main       — ScrapeResult of the main profile page (may be None)
-     scraped_subpages   — list[ScrapeResult] of hiring/openings sub-pages
+     scraped_subpages   — list[ScrapeResult] of lab, research, publication,
+                          people/contact, and hiring sub-pages
      s2_papers          — list of papers from Semantic Scholar (may be empty)
    If scraped_main is absent, fall back to WebFetch. #}
 You are helping {{ user.name }}, a {{ user.current_role }} at
@@ -22,7 +23,7 @@ Task: research Professor {{ professor.name }} at {{ professor.university }}.
 {{ scraped_main.markdown or scraped_main.text }}
 
 {% if scraped_subpages %}
-### Hiring / prospective-student sub-pages (pre-fetched)
+### Evidence sub-pages (pre-fetched)
 
 {% for page in scraped_subpages %}
 #### {{ page.final_url or page.url }}
@@ -32,10 +33,11 @@ Task: research Professor {{ professor.name }} at {{ professor.university }}.
 ---
 {% endfor %}
 {% else %}
-No hiring-specific sub-pages were found automatically. If you notice any links
-in the content above that look like "join us", "openings", "prospective students"
-etc., and they are on the same domain as the professor's own page (not the
-university's general site), use WebFetch to retrieve them.
+No high-value sub-pages were found automatically. If you notice links in the
+content above that look like lab, group, research, publications, projects,
+students, contact, "join us", "openings", or "prospective students", and they
+are on the same domain as the professor's own page, use WebFetch to retrieve
+them.
 {% endif %}
 
 {% else %}
