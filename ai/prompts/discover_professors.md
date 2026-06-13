@@ -36,7 +36,7 @@ Research categories: {{ user.research_categories | join(', ') }}
 {% endif %}
 {% if start_date %}**Target start date:** {{ start_date }}{% endif %}
 {% if duration and duration != "any" %}**Duration:** {{ duration }} (postdoc){% endif %}
-{% if target_countries %}**Preferred countries / regions:** {{ target_countries }}{% endif %}
+{% if target_countries %}**Required countries / regions:** {{ target_countries }} - HARD CONSTRAINT. Only return professors whose university is physically located in these countries / regions. Skip all other countries even if the research match is excellent.{% endif %}
 {% if exclude_countries %}**Exclude countries:** {{ exclude_countries }}{% endif %}
 {% if language_english_only %}**Language:** English instruction only{% endif %}
 {% if prof_ranks %}**Academic rank filter:** {{ prof_ranks }} professors only{% endif %}
@@ -95,6 +95,7 @@ For each candidate:
 {% if target_departments %}- Strictly filter by target departments: {{ target_departments }}. Skip professors outside these departments even if their research overlaps.{% endif %}
 - Prefer professors who have supervised students in the target position type ({{ position_type or "phd" }})
 - Interdisciplinary profiles → cast a wider net across adjacent departments
+- If required countries / regions are provided, verify the university location before returning the professor
 - Be honest: if you cannot confirm a match or the page is unavailable, skip
 
 ---
@@ -108,6 +109,7 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
     {
       "name": "...",
       "university": "...",
+      "country": "...",
       "profile_url": "... or null",
       "research_angle": "1–2 sentences: what they work on and exactly why it matches this applicant",
       "research_category": "primary category keyword (lowercase, short)",
@@ -119,6 +121,7 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
 }
 
 Field notes:
+- `country`: the country where the university is located; required when target countries / regions are provided
 - `match_score` 0–100: how well research aligns with the applicant's profile
 - `hiring_signals`: true = clearly accepting students, false = closed, null = unclear
 - Sort by match_score descending

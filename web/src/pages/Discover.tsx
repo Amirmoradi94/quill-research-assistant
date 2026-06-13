@@ -634,6 +634,7 @@ function researchSettingsFromProfile(profile: UserProfileFull): Partial<Discover
   ])
 
   return {
+    ...targetSettingsFromProfile(profile),
     primary_keywords: joinTerms(uniqueTerms([...categories, ...headlineTerms, ...interestTerms]).slice(0, 12)),
     adjacent_areas: joinTerms(uniqueTerms([...domains, ...splitTerms(profile.datasets_used)]).slice(0, 8)),
     methods_techniques: joinTerms(uniqueTerms([
@@ -644,6 +645,19 @@ function researchSettingsFromProfile(profile: UserProfileFull): Partial<Discover
     application_domain: joinTerms(domains.slice(0, 8)),
     target_departments: joinTerms(departments.slice(0, 8)),
   }
+}
+
+function targetSettingsFromProfile(profile: UserProfileFull): Partial<DiscoverySettings> {
+  const out: Partial<DiscoverySettings> = {}
+  if (isPositionType(profile.target_position_type)) out.position_type = profile.target_position_type
+  if (profile.target_start_date) out.start_date = profile.target_start_date
+  const countries = joinTerms(splitTerms(profile.target_countries))
+  if (countries) out.countries = countries
+  return out
+}
+
+function isPositionType(value: unknown): value is PositionType {
+  return value === 'postdoc' || value === 'phd' || value === 'master'
 }
 
 function splitTerms(value: unknown): string[] {
@@ -1154,6 +1168,19 @@ export function Discover() {
     reload()
     window.addEventListener('quill:data-changed', reload)
     return () => window.removeEventListener('quill:data-changed', reload)
+  }, [])
+
+  useEffect(() => {
+    api.user().then((profile) => {
+      const targets = targetSettingsFromProfile(profile)
+      if (!Object.keys(targets).length) return
+      setSettings((current) => ({
+        ...current,
+        position_type: targets.position_type ?? current.position_type,
+        start_date: current.start_date || targets.start_date || '',
+        countries: current.countries.trim() ? current.countries : targets.countries || '',
+      }))
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {

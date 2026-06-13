@@ -559,8 +559,11 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
 
     elif request.workflow == Workflow.DISCOVER_PROFESSORS:
         professors = payload.get("professors", [])
+        allowed_countries = _normalize_country_filter(request.params.get("target_countries"))
         for p in professors:
             if not p.get("name") or not p.get("university"):
+                continue
+            if allowed_countries and not _country_matches_filter(p.get("country"), allowed_countries):
                 continue
             existing = (
                 db.query(models.Professor.id)
@@ -584,6 +587,46 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
             )
             db.add(prof)
         db.commit()
+
+
+def _normalize_country_filter(value: Any) -> set[str]:
+    if not value:
+        return set()
+    items = value if isinstance(value, list) else str(value).replace(";", ",").split(",")
+    return {
+        normalized
+        for item in items
+        if (normalized := _normalize_country_name(str(item)))
+    }
+
+
+def _country_matches_filter(country: Any, allowed: set[str]) -> bool:
+    if not allowed:
+        return True
+    normalized = _normalize_country_name(str(country or ""))
+    return bool(normalized and normalized in allowed)
+
+
+def _normalize_country_name(value: str) -> str:
+    compact = value.strip().lower()
+    compact = compact.replace(".", "")
+    aliases = {
+        "ca": "canada",
+        "can": "canada",
+        "canada": "canada",
+        "us": "united states",
+        "usa": "united states",
+        "u s": "united states",
+        "u s a": "united states",
+        "united states": "united states",
+        "united states of america": "united states",
+        "america": "united states",
+        "uk": "united kingdom",
+        "u k": "united kingdom",
+        "united kingdom": "united kingdom",
+        "great britain": "united kingdom",
+    }
+    return aliases.get(compact, compact)
 
 
 # ───────────────────────────────────────────────────────────────────
