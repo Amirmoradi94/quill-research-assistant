@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Compass, Sparkles, Check, X, Loader, ChevronDown, ChevronUp,
   AlertCircle, RefreshCw, SlidersHorizontal, ExternalLink, CircleDot,
@@ -59,6 +59,16 @@ type DiscoverySettings = {
   target_departments: string
 }
 
+type DiscoveryBatchProgress = {
+  current: number
+  total: number
+  batchSize: number
+  target: number
+}
+
+const DISCOVERY_BATCH_SIZE = 10
+const DISCOVERY_BATCH_TIMEOUT_S = 600
+
 const DEFAULT: DiscoverySettings = {
   position_type: 'phd',
   start_date: '',
@@ -115,11 +125,25 @@ const SORT_LABELS: Record<SortBy, string> = {
   match_score: 'Match score', hiring: 'Hiring likelihood', location: 'Location',
 }
 
-function buildPromptParams(s: DiscoverySettings, existingUniversities: Set<string>, dismissedIds: number[]): Record<string, unknown> {
+function buildPromptParams(
+  s: DiscoverySettings,
+  existingUniversities: Set<string>,
+  dismissedIds: number[],
+  batch?: DiscoveryBatchProgress & { excludeCandidates: string[] },
+): Record<string, unknown> {
   const params: Record<string, unknown> = {
     position_type: s.position_type,
-    count: s.count,
+    count: batch?.batchSize ?? s.count,
     max_per_university: s.max_per_university,
+  }
+
+  if (batch) {
+    params.discovery_batch = batch.current
+    params.discovery_total_batches = batch.total
+    params.discovery_total_target = batch.target
+    if (batch.excludeCandidates.length > 0) {
+      params.exclude_candidates = batch.excludeCandidates.slice(0, 250).join('\n')
+    }
   }
 
   if (s.start_date) params.start_date = s.start_date
@@ -701,8 +725,12 @@ function Toggle({ checked, onChange, label }: {
 
 // ─── run status bar ─────────────────────────────────────────────────
 
-function RunStatus({ quill, suggestionCount, mode }: {
-  quill: ReturnType<typeof useQuillRun>; suggestionCount: number; mode: 'discover' | 'research' | null
+function RunStatus({ quill, suggestionCount, mode, batchProgress, onStop }: {
+  quill: ReturnType<typeof useQuillRun>
+  suggestionCount: number
+  mode: 'discover' | 'research' | null
+  batchProgress?: DiscoveryBatchProgress | null
+  onStop?: () => void
 }) {
   const [showLog, setShowLog] = useState(true)
   const [now, setNow] = useState(Date.now())
@@ -720,7 +748,9 @@ function RunStatus({ quill, suggestionCount, mode }: {
   const title = mode === 'research' ? 'Research monitor' : 'Discovery monitor'
   const activeText = mode === 'research'
     ? 'Researching the selected candidate'
-    : 'Searching, scoring, and preparing candidate suggestions'
+    : batchProgress
+      ? `Batch ${batchProgress.current}/${batchProgress.total}: finding ${batchProgress.batchSize} professors`
+      : 'Searching, scoring, and preparing candidate suggestions'
   const steps = [
     { label: 'Create run', done: !!quill.runId, active: quill.state === 'running' && !quill.runId },
     { label: 'Start AI provider', done: providerStarted || quill.state === 'done', active: quill.state === 'running' && !!quill.runId && !providerStarted },
@@ -756,11 +786,16 @@ function RunStatus({ quill, suggestionCount, mode }: {
                   ? `Stopped after ${elapsed}s`
                   : quill.error}
           </div>
+          {mode === 'discover' && batchProgress && (
+            <div className="mt-1 text-[11px]" style={{ color: 'var(--color-muted)' }}>
+              Overall target {batchProgress.target}; completed batches are saved before the next Codex run starts.
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
           {quill.state === 'running' && (
-            <button onClick={quill.cancel} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
+            <button onClick={onStop ?? quill.cancel} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
               style={{ borderColor: 'var(--color-amber-300)', background: 'var(--color-amber-50)', color: 'var(--color-amber-700)' }}>
               <Square size={11} /> Stop
             </button>
@@ -1086,30 +1121,33 @@ function summarizeBreakdown(breakdown: any): string {
 
 export function Discover() {
   const [suggested, setSuggested] = useState<Professor[]>([])
-  const [existingUniversities, setExistingUniversities] = useState<Set<string>>(new Set())
-  const [dismissedIds, setDismissedIds] = useState<number[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [settings, setSettings] = useState<DiscoverySettings>(DEFAULT)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [activeWorkflow, setActiveWorkflow] = useState<'discover' | 'research' | null>(null)
+  const [discoveryBatch, setDiscoveryBatch] = useState<DiscoveryBatchProgress | null>(null)
+  const discoveryStopRef = useRef(false)
   const quill = useQuillRun()
 
-  const reload = () => {
-    api.professors().then((all) => {
-      const nextSuggested = all.filter((p) => p.is_suggested && !(p as any).dismissed_at)
-      setSuggested(nextSuggested)
-      setExistingUniversities(new Set(
-        all.filter((p) => !p.is_suggested && p.university).map((p) => p.university!)
-      ))
-      setDismissedIds(
-        all.filter((p) => (p as any).dismissed_at).map((p) => p.id)
-      )
-      setSelectedId((current) => {
-        if (current && nextSuggested.some((p) => p.id === current)) return current
-        return nextSuggested[0]?.id ?? null
-      })
-    }).catch((e) => setErr(String(e)))
+  const applyProfessorState = (all: Professor[]) => {
+    const nextSuggested = all.filter((p) => p.is_suggested && !(p as any).dismissed_at)
+    setSuggested(nextSuggested)
+    setSelectedId((current) => {
+      if (current && nextSuggested.some((p) => p.id === current)) return current
+      return nextSuggested[0]?.id ?? null
+    })
+  }
+
+  const reload = async () => {
+    try {
+      const all = await api.professors()
+      applyProfessorState(all)
+      return all
+    } catch (e) {
+      setErr(String(e))
+      return []
+    }
   }
 
   useEffect(() => {
@@ -1122,13 +1160,50 @@ export function Discover() {
     if (suggested.length > 0 && quill.state === 'done') setSettingsOpen(false)
   }, [suggested.length, quill.state])
 
-  const runDiscovery = () => {
-    const params = buildPromptParams(settings, existingUniversities, dismissedIds)
+  const runDiscovery = async () => {
+    if (quill.state === 'running' || discoveryBatch) return
+    discoveryStopRef.current = false
     setActiveWorkflow('discover')
-    quill.start({ workflow: 'discover_professors', params }).then(() => {
+    setErr(null)
+
+    const totalTarget = settings.count
+    const totalBatches = Math.max(1, Math.ceil(totalTarget / DISCOVERY_BATCH_SIZE))
+
+    try {
+      for (let index = 0; index < totalBatches; index += 1) {
+        if (discoveryStopRef.current) break
+
+        const all = await reload()
+        const excludeCandidates = all
+          .filter((p) => p.name && p.university)
+          .map((p) => `${p.name} — ${p.university}`)
+        const batchSize = Math.min(DISCOVERY_BATCH_SIZE, totalTarget - index * DISCOVERY_BATCH_SIZE)
+        const progress = { current: index + 1, total: totalBatches, batchSize, target: totalTarget }
+        setDiscoveryBatch(progress)
+
+        const existing = new Set(
+          all.filter((p) => !p.is_suggested && p.university).map((p) => p.university!)
+        )
+        const dismissed = all.filter((p) => (p as any).dismissed_at).map((p) => p.id)
+        const params = buildPromptParams(settings, existing, dismissed, { ...progress, excludeCandidates })
+        const result = await quill.start({
+          workflow: 'discover_professors',
+          params,
+          max_turns: 12,
+          timeout_s: DISCOVERY_BATCH_TIMEOUT_S,
+        })
+        await reload()
+        if (result !== 'done') break
+      }
+    } finally {
+      setDiscoveryBatch(null)
       setActiveWorkflow(null)
-      reload()
-    })
+    }
+  }
+
+  const stopDiscovery = () => {
+    discoveryStopRef.current = true
+    quill.cancel()
   }
 
   // front-end filters on results
@@ -1212,10 +1287,10 @@ export function Discover() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            <button onClick={runDiscovery} disabled={quill.state === 'running'}
+            <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold disabled:opacity-60"
               style={{ background: 'var(--color-ink)', color: 'white' }}>
-              {quill.state === 'running' && activeWorkflow === 'discover'
+              {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
                 ? <Loader size={13} className="animate-spin" />
                 : <Sparkles size={13} />}
               Run discovery
@@ -1255,10 +1330,11 @@ export function Discover() {
 
       {settingsOpen && (
         <SettingsPanel settings={settings} onChange={setSettings}
-          onRun={runDiscovery} running={quill.state === 'running'} />
+          onRun={runDiscovery} running={quill.state === 'running' || !!discoveryBatch} />
       )}
 
-      <RunStatus quill={quill} suggestionCount={suggested.length} mode={activeWorkflow} />
+      <RunStatus quill={quill} suggestionCount={suggested.length} mode={activeWorkflow}
+        batchProgress={discoveryBatch} onStop={stopDiscovery} />
 
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-3 items-start">
           <section className="rounded-md border overflow-hidden"
@@ -1271,10 +1347,10 @@ export function Discover() {
                   {filtered.length ? `${filtered.length} candidates ready for review` : 'No visible candidates'}
                 </div>
               </div>
-              <button onClick={runDiscovery} disabled={quill.state === 'running'}
+              <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold disabled:opacity-60"
                 style={{ background: 'var(--color-ink)', color: 'white' }}>
-                {quill.state === 'running' && activeWorkflow === 'discover'
+                {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
                   ? <Loader size={12} className="animate-spin" />
                   : <Sparkles size={12} />}
                 Run

@@ -17,6 +17,8 @@ export type QuillRunOptions = {
   professor_id?: number
   document_id?: number
   grant_id?: number
+  max_turns?: number
+  timeout_s?: number
 }
 
 export function useQuillRun() {
@@ -68,6 +70,8 @@ export function useQuillRun() {
           professor_id: opts.professor_id ?? null,
           document_id: opts.document_id ?? null,
           grant_id: opts.grant_id ?? null,
+          max_turns: opts.max_turns,
+          timeout_s: opts.timeout_s,
         }),
       })
 
@@ -133,6 +137,7 @@ export function useQuillRun() {
 
       setEndedAt((current) => current ?? Date.now())
       setState('done')
+      return 'done'
     } catch (e: unknown) {
       if (controller.signal.aborted) {
         if (abortRef.current !== controller) return
@@ -140,13 +145,14 @@ export function useQuillRun() {
         setEndedAt(Date.now())
         pushEvent('cancelled', 'Workflow stopped by user')
         setState('cancelled')
-        return
+        return 'cancelled'
       }
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       setEndedAt(Date.now())
       pushEvent('error', 'Workflow failed', message)
       setState('error')
+      return 'error'
     } finally {
       if (abortRef.current === controller) abortRef.current = null
     }

@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .database import get_db
@@ -561,9 +562,17 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
         for p in professors:
             if not p.get("name") or not p.get("university"):
                 continue
+            existing = (
+                db.query(models.Professor.id)
+                .filter(func.lower(models.Professor.name) == str(p["name"]).strip().lower())
+                .filter(func.lower(models.Professor.university) == str(p["university"]).strip().lower())
+                .first()
+            )
+            if existing:
+                continue
             prof = models.Professor(
-                name=p["name"],
-                university=p["university"],
+                name=str(p["name"]).strip(),
+                university=str(p["university"]).strip(),
                 profile_url=p.get("profile_url"),
                 research_angle=p.get("research_angle"),
                 research_category=p.get("research_category", ""),
@@ -998,7 +1007,8 @@ def _prepare_ai_run(
     params = {**base_ctx, **req.params}
 
     max_turns = max(1, min(req.max_turns, 30))
-    timeout_s = max(10, min(req.timeout_s, 300))
+    timeout_cap = 900 if workflow == Workflow.DISCOVER_PROFESSORS else 300
+    timeout_s = max(10, min(req.timeout_s, timeout_cap))
     run_request = RunRequest(
         workflow=workflow,
         params=params,

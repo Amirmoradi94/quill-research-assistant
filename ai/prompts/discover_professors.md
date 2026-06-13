@@ -29,6 +29,11 @@ Research categories: {{ user.research_categories | join(', ') }}
 ## Search parameters
 
 **Position type:** {{ position_type or "phd" }}
+{% if discovery_batch and discovery_total_batches %}
+**Discovery batch:** {{ discovery_batch }} of {{ discovery_total_batches }}
+**Overall target:** {{ discovery_total_target }} professors across all batches
+**This batch target:** {{ count or 10 }} new professors
+{% endif %}
 {% if start_date %}**Target start date:** {{ start_date }}{% endif %}
 {% if duration and duration != "any" %}**Duration:** {{ duration }} (postdoc){% endif %}
 {% if target_countries %}**Preferred countries / regions:** {{ target_countries }}{% endif %}
@@ -59,11 +64,22 @@ Research categories: {{ user.research_categories | join(', ') }}
 {{ skip_professor_ids }}
 {% endif %}
 
+{% if exclude_candidates %}
+## Professors already found or already in the pipeline
+Do not return these professors again. Use this list to move to adjacent labs,
+different universities, and less obvious matches in this batch.
+
+{{ exclude_candidates }}
+{% endif %}
+
 ---
 
 ## Task
 
-Find **{{ count or 10 }}** professors worldwide whose research is the strongest match for this profile.
+Find **{{ count or 10 }}** new professors worldwide whose research is the strongest match for this profile.
+{% if discovery_batch and discovery_total_batches %}
+This is one batch in a larger discovery pass, not the final universe of possible matches. If the obvious matches are already excluded, broaden to adjacent universities, labs, departments, and keywords while preserving match quality.
+{% endif %}
 
 For each candidate:
 1. Use WebSearch to locate their faculty page: search `"[name] [university] professor [field]"`
