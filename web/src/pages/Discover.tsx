@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Compass, Sparkles, Check, X, Loader, ChevronDown, ChevronUp,
   AlertCircle, RefreshCw, SlidersHorizontal, ExternalLink, CircleDot,
-  MapPin, BookOpen, BadgeDollarSign, Filter, Users,
+  MapPin, BookOpen, BadgeDollarSign, Filter, Users, Square,
 } from 'lucide-react'
 import { api, type Professor, type UserProfileFull } from '@/lib/api'
 import { formatCategory } from '@/lib/categories'
@@ -738,6 +738,7 @@ function RunStatus({ quill, suggestionCount, mode }: {
             {quill.state === 'running' && <Loader size={14} className="animate-spin" style={{ color: 'var(--color-brand-600)' }} />}
             {quill.state === 'done' && <Check size={14} style={{ color: 'var(--color-green-700)' }} />}
             {quill.state === 'error' && <AlertCircle size={14} style={{ color: 'var(--color-rose-700)' }} />}
+            {quill.state === 'cancelled' && <Square size={14} style={{ color: 'var(--color-amber-700)' }} />}
             <h2 className="text-[14px] font-bold" style={{ color: 'var(--color-ink)' }}>{title}</h2>
             {quill.runId && (
               <span className="rounded border px-1.5 py-0.5 font-mono text-[10px]"
@@ -751,11 +752,19 @@ function RunStatus({ quill, suggestionCount, mode }: {
               ? `${activeText} · ${elapsed}s elapsed`
               : quill.state === 'done'
                 ? `Done in ${elapsed}s · ${suggestionCount} suggestion${suggestionCount !== 1 ? 's' : ''} ready`
-                : quill.error}
+                : quill.state === 'cancelled'
+                  ? `Stopped after ${elapsed}s`
+                  : quill.error}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {quill.state === 'running' && (
+            <button onClick={quill.cancel} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
+              style={{ borderColor: 'var(--color-amber-300)', background: 'var(--color-amber-50)', color: 'var(--color-amber-700)' }}>
+              <Square size={11} /> Stop
+            </button>
+          )}
           <button onClick={() => setShowLog(!showLog)} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px]"
             style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper-2)', color: 'var(--color-ink-soft)' }}>
             {showLog ? <ChevronUp size={12} /> : <ChevronDown size={12} />}

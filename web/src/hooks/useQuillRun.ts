@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { apiUrl } from '@/lib/runtime'
 
-export type RunState = 'idle' | 'running' | 'done' | 'error'
+export type RunState = 'idle' | 'running' | 'done' | 'error' | 'cancelled'
 
 export type QuillRunEvent = {
   id: string
@@ -27,6 +27,8 @@ export function useQuillRun() {
   const [runId, setRunId] = useState<number | null>(null)
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const [endedAt, setEndedAt] = useState<number | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const runIdRef = useRef<number | null>(null)
 
   const pushEvent = useCallback((kind: string, label: string, detail?: string) => {
     setEvents((prev) => [
@@ -42,6 +44,10 @@ export function useQuillRun() {
   }, [])
 
   const start = useCallback(async (opts: QuillRunOptions) => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    runIdRef.current = null
     setState('running')
     setLines([])
     setEvents([])
@@ -54,6 +60,7 @@ export function useQuillRun() {
     try {
       const res = await fetch(apiUrl('/api/ai/run'), {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workflow: opts.workflow,
@@ -89,6 +96,7 @@ export function useQuillRun() {
             try {
               const data = JSON.parse(line.slice(6))
               if (currentKind === 'run_id') {
+                runIdRef.current = data.id
                 setRunId(data.id)
                 pushEvent('run_id', `Run #${data.id} created`, data.provider ? `Provider: ${data.provider}` : undefined)
               } else if (currentKind === 'started') {
@@ -126,15 +134,44 @@ export function useQuillRun() {
       setEndedAt((current) => current ?? Date.now())
       setState('done')
     } catch (e: unknown) {
+      if (controller.signal.aborted) {
+        if (abortRef.current !== controller) return
+        setError(null)
+        setEndedAt(Date.now())
+        pushEvent('cancelled', 'Workflow stopped by user')
+        setState('cancelled')
+        return
+      }
       const message = e instanceof Error ? e.message : String(e)
       setError(message)
       setEndedAt(Date.now())
       pushEvent('error', 'Workflow failed', message)
       setState('error')
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null
+    }
+  }, [pushEvent])
+
+  const cancel = useCallback(async () => {
+    const currentRunId = runIdRef.current
+    abortRef.current?.abort()
+    setEndedAt(Date.now())
+    pushEvent('cancelled', 'Stop requested by user')
+    setState('cancelled')
+    if (currentRunId) {
+      try {
+        await fetch(apiUrl(`/api/ai/runs/${currentRunId}/cancel`), { method: 'POST' })
+      } catch {
+        // Disconnecting the stream is the real cancellation path; this endpoint
+        // is only a best-effort DB status update if the stream is still alive.
+      }
     }
   }, [pushEvent])
 
   const reset = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    runIdRef.current = null
     setState('idle')
     setLines([])
     setEvents([])
@@ -146,7 +183,7 @@ export function useQuillRun() {
 
   const logText = lines.join('')
 
-  return { state, lines, logText, events, error, runId, startedAt, endedAt, start, reset }
+  return { state, lines, logText, events, error, runId, startedAt, endedAt, start, cancel, reset }
 }
 
 function summarizeEventData(data: Record<string, unknown>): string | undefined {
