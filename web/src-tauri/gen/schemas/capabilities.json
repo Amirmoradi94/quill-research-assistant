@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default permissions for the main Quill AI window.","local":true,"windows":["*"],"permissions":["core:default","shell:allow-open"]}}

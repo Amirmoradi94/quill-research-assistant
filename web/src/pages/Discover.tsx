@@ -7,6 +7,7 @@ import {
 import { api, type Professor, type UserProfileFull } from '@/lib/api'
 import { formatCategory } from '@/lib/categories'
 import { useQuillRun } from '@/hooks/useQuillRun'
+import { openExternalUrl } from '@/lib/openExternal'
 
 // ─── settings type ─────────────────────────────────────────────────
 
@@ -1074,6 +1075,10 @@ function CandidatePreview({ p, onAccept, onDismiss, onResearch, researching }: {
           </button>
           {p.profile_url && (
             <a href={p.profile_url} target="_blank" rel="noreferrer"
+              onClick={(e) => {
+                e.preventDefault()
+                openExternalUrl(p.profile_url)
+              }}
               className="ml-auto inline-flex items-center gap-1 text-[12px]"
               style={{ color: 'var(--color-brand-600)' }}>
               Faculty page <ExternalLink size={11} />

@@ -21,6 +21,7 @@ import { api, type Professor } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
 import { useConfirm } from '@/components/ConfirmDialog'
+import { openExternalUrl } from '@/lib/openExternal'
 
 type SortKey = 'number' | 'name' | 'university' | 'dept_lab' | 'research_category' | 'tier' | 'status' | 'email' | 'score'
 type IconComponent = ComponentType<{ size?: number; className?: string; style?: CSSProperties }>
@@ -1038,6 +1039,10 @@ function ExternalButton({ href, children }: { href: string; children: ReactNode 
       href={href}
       target="_blank"
       rel="noopener"
+      onClick={(e) => {
+        e.preventDefault()
+        openExternalUrl(href)
+      }}
       className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium"
       style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
     >

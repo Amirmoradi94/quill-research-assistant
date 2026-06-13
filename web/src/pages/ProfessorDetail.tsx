@@ -5,6 +5,7 @@ import { api, type Professor, type UserProfile } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
 import { useQuillRun } from '@/hooks/useQuillRun'
+import { openExternalUrl } from '@/lib/openExternal'
 
 const STATUSES = ['drafting', 'sent', 'no_reply', 'replied', 'interview', 'offer', 'rejected', 'skipped']
 const TIERS = ['T1', 'T2', 'T3']
@@ -227,29 +228,17 @@ export function ProfessorDetail() {
                     </FieldRow>
                     <FieldRow label="Faculty page" icon={<Building2 size={13} />}>
                       {prof.profile_url
-                        ? <a href={prof.profile_url} target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[14px] font-medium"
-                            style={{ color: 'var(--color-brand-600)' }}>
-                            Visit <ExternalLink size={11} />
-                          </a>
+                        ? <ExternalLinkButton href={prof.profile_url}>Visit</ExternalLinkButton>
                         : <span className="text-[14px]" style={{ color: 'var(--color-muted)' }}>—</span>}
                     </FieldRow>
                     {prof.scholar_url && (
                       <FieldRow label="Google Scholar" icon={<GraduationCap size={13} />}>
-                        <a href={prof.scholar_url} target="_blank" rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-[14px] font-medium"
-                          style={{ color: 'var(--color-brand-600)' }}>
-                          Profile <ExternalLink size={11} />
-                        </a>
+                        <ExternalLinkButton href={prof.scholar_url}>Profile</ExternalLinkButton>
                       </FieldRow>
                     )}
                     {prof.lab_url && (
                       <FieldRow label="Lab / group" icon={<Briefcase size={13} />}>
-                        <a href={prof.lab_url} target="_blank" rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-[14px] font-medium"
-                          style={{ color: 'var(--color-brand-600)' }}>
-                          Open <ExternalLink size={11} />
-                        </a>
+                        <ExternalLinkButton href={prof.lab_url}>Open</ExternalLinkButton>
                       </FieldRow>
                     )}
                     <FieldRow label="Research category" icon={<Tag size={13} />}>
@@ -316,6 +305,11 @@ export function ProfessorDetail() {
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div className="flex-1 min-w-0">
                             <a href={paper.url || '#'} target="_blank" rel="noreferrer"
+                              onClick={(e) => {
+                                if (!paper.url) return
+                                e.preventDefault()
+                                openExternalUrl(paper.url)
+                              }}
                               className="text-[15px] font-semibold block mb-2 hover:underline"
                               style={{ color: paper.url ? 'var(--color-brand-600)' : 'var(--color-ink)', lineHeight: 1.4 }}>
                               {paper.title}
@@ -344,16 +338,10 @@ export function ProfessorDetail() {
                         {(paper.url || paper.pdf_url) && (
                           <div className="flex gap-3">
                             {paper.url && (
-                              <a href={paper.url} target="_blank" rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-[14px]" style={{ color: 'var(--color-brand-600)' }}>
-                                Read paper <ExternalLink size={11} />
-                              </a>
+                              <ExternalLinkButton href={paper.url} compact>Read paper</ExternalLinkButton>
                             )}
                             {paper.pdf_url && (
-                              <a href={paper.pdf_url} target="_blank" rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-[14px]" style={{ color: 'var(--color-brand-600)' }}>
-                                Download PDF <ExternalLink size={11} />
-                              </a>
+                              <ExternalLinkButton href={paper.pdf_url} compact>Download PDF</ExternalLinkButton>
                             )}
                           </div>
                         )}
@@ -413,6 +401,24 @@ export function ProfessorDetail() {
         </div>
       </div>
     </div>
+  )
+}
+
+function ExternalLinkButton({ href, compact = false, children }: { href: string; compact?: boolean; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => {
+        e.preventDefault()
+        openExternalUrl(href)
+      }}
+      className={`inline-flex items-center gap-1 ${compact ? 'text-[14px]' : 'text-[14px] font-medium'}`}
+      style={{ color: 'var(--color-brand-600)' }}
+    >
+      {children} <ExternalLink size={11} />
+    </a>
   )
 }
 

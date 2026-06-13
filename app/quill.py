@@ -21,6 +21,7 @@ import ipaddress
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -444,10 +445,153 @@ class _DotDict(dict):
         return self.get(k)
 
 
+_DISCOVERY_PAPER_STOPWORDS = {
+    "about", "after", "again", "against", "also", "and", "are", "based", "been",
+    "between", "both", "can", "data", "for", "from", "has", "have", "into", "its",
+    "model", "models", "new", "not", "our", "paper", "papers", "research", "study",
+    "studies", "system", "systems", "that", "the", "their", "these", "this", "those",
+    "through", "using", "was", "were", "with", "work", "works",
+}
+
+
+def _jsonish_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(_jsonish_text(v) for v in value)
+    if isinstance(value, dict):
+        return " ".join(f"{k} {_jsonish_text(v)}" for k, v in value.items())
+    return str(value)
+
+
+def _discovery_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z][a-z0-9+\-.]{2,}", (text or "").lower())
+        if token not in _DISCOVERY_PAPER_STOPWORDS
+    }
+
+
+def _discovery_profile_publication_tokens(db: Session) -> set[str]:
+    user = db.query(models.User).first()
+    parts: list[str] = []
+    if user:
+        parts.extend([
+            user.headline or "",
+            user.research_interests or "",
+            _jsonish_text(user.research_categories),
+            _jsonish_text(user.methods),
+            _jsonish_text(user.application_domains),
+            _jsonish_text(user.tools_frameworks),
+            _jsonish_text(user.datasets_used),
+            _jsonish_text(user.datasets_created),
+        ])
+        publications = (
+            db.query(models.UserPublication)
+            .filter(models.UserPublication.user_id == user.id)
+            .order_by(models.UserPublication.is_signature.desc(), models.UserPublication.year.desc())
+            .limit(12)
+            .all()
+        )
+        for pub in publications:
+            parts.extend([
+                pub.title or "",
+                pub.abstract or "",
+                pub.one_line_takeaway or "",
+                pub.venue_short or "",
+                pub.venue_full_name or "",
+                pub.type or "",
+            ])
+
+    return _discovery_tokens("\n".join(parts))
+
+
+def _score_discovery_paper(paper: dict[str, Any], query_tokens: set[str]) -> tuple[int, list[str]]:
+    text = " ".join([
+        str(paper.get("title") or ""),
+        str(paper.get("venue") or ""),
+        str(paper.get("abstract") or ""),
+    ])
+    paper_tokens = _discovery_tokens(text)
+    overlap = sorted(query_tokens & paper_tokens)
+    current_year = datetime.utcnow().year
+    year = paper.get("year")
+    try:
+        age = max(0, current_year - int(year)) if year else 8
+    except Exception:
+        age = 8
+    recency_bonus = max(0, 20 - (age * 3))
+    lexical_score = min(80, len(overlap) * 8)
+    if not query_tokens:
+        lexical_score = 35
+    score = max(0, min(100, lexical_score + recency_bonus))
+    return int(score), overlap[:6]
+
+
+def _discovery_paper_summary(paper: dict[str, Any], matched_terms: list[str]) -> str:
+    title = str(paper.get("title") or "This paper")
+    year = paper.get("year")
+    year_text = f" ({year})" if year else ""
+    if matched_terms:
+        return f"{title}{year_text} overlaps with your profile/publications on {', '.join(matched_terms[:4])}."
+    return f"{title}{year_text} is one of this professor's recent publications; run Research for a deeper fit summary."
+
+
+async def _save_discovery_professor_papers(db: Session, prof: models.Professor, query_tokens: set[str]) -> None:
+    from .semantic_scholar import fetch_professor_papers
+
+    try:
+        papers = await fetch_professor_papers(prof.name, prof.university, limit=25)
+    except Exception:
+        papers = []
+    if not papers:
+        return
+
+    seen_titles: set[str] = set()
+    scored: list[tuple[int, int, dict[str, Any], list[str]]] = []
+    for paper in papers:
+        if not paper.get("title"):
+            continue
+        title_key = str(paper["title"]).strip().lower()
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        score, matched = _score_discovery_paper(paper, query_tokens)
+        year = paper.get("year") or 0
+        scored.append((score, int(year) if isinstance(year, int) else 0, paper, matched))
+
+    if not scored:
+        return
+
+    ranked = sorted(scored, key=lambda row: (row[0], row[1]), reverse=True)
+    selected = [row for row in ranked if row[0] >= 45][:5]
+    for row in ranked:
+        if len(selected) >= min(5, len(ranked)):
+            break
+        if row not in selected:
+            selected.append(row)
+
+    for score, _year, paper, matched in selected:
+        db.add(models.ProfessorPaper(
+            professor_id=prof.id,
+            title=paper["title"],
+            venue=paper.get("venue"),
+            year=paper.get("year"),
+            abstract=paper.get("abstract"),
+            url=paper.get("url"),
+            pdf_url=paper.get("pdf_url"),
+            s2_id=paper.get("s2_id"),
+            relevance_score=score,
+            relevance_summary=_discovery_paper_summary(paper, matched),
+        ))
+
+
 # ───────────────────────────────────────────────────────────────────
 # Post-run result application
 # ───────────────────────────────────────────────────────────────────
-def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> None:
+async def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> None:
     """Parse JSON from AI output and write relevant fields to the DB."""
     from ai.runner import extract_json_payload, Workflow  # local to avoid circular import
 
@@ -560,6 +704,7 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
     elif request.workflow == Workflow.DISCOVER_PROFESSORS:
         professors = payload.get("professors", [])
         allowed_countries = _normalize_country_filter(request.params.get("target_countries"))
+        query_tokens = _discovery_profile_publication_tokens(db)
         for p in professors:
             if not p.get("name") or not p.get("university"):
                 continue
@@ -598,6 +743,8 @@ def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> 
                 contact_instructions=p.get("contact_instructions"),
             )
             db.add(prof)
+            db.flush()
+            await _save_discovery_professor_papers(db, prof, query_tokens)
         db.commit()
 
 
@@ -962,7 +1109,7 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
 
         # Write workflow-specific results back to the DB.
         if run and run.status == "done":
-            _apply_workflow_result(db, request, full_text or last_event.get("result") or "")
+            await _apply_workflow_result(db, request, full_text or last_event.get("result") or "")
     except Exception as exc:
         # Any unhandled exception (template render error, subprocess crash, etc.)
         # must flip the row to "failed" so it never stays stuck at "running".
