@@ -4,7 +4,7 @@ import {
   AlertCircle, RefreshCw, SlidersHorizontal, ExternalLink, CircleDot,
   MapPin, BookOpen, BadgeDollarSign, Filter, Users,
 } from 'lucide-react'
-import { api, type Professor } from '@/lib/api'
+import { api, type Professor, type UserProfileFull } from '@/lib/api'
 import { formatCategory } from '@/lib/categories'
 import { useQuillRun } from '@/hooks/useQuillRun'
 
@@ -178,6 +178,8 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
   running: boolean
 }) {
   const [open, setOpen] = useState<Set<SectionId>>(new Set(['position', 'research']))
+  const [autoFilling, setAutoFilling] = useState(false)
+  const [autoFillMessage, setAutoFillMessage] = useState<{ ok: boolean; text: string } | null>(null)
 
   const set = <K extends keyof DiscoverySettings>(k: K, v: DiscoverySettings[K]) =>
     onChange({ ...s, [k]: v })
@@ -193,6 +195,38 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
       ? s.prof_ranks.filter((r) => r !== rank)
       : [...s.prof_ranks, rank]
     if (next.length > 0) set('prof_ranks', next)
+  }
+
+  const autoFillResearchFocus = async () => {
+    setAutoFilling(true)
+    setAutoFillMessage(null)
+    try {
+      let profile = await api.user()
+      const docs = await api.documents('cv')
+      const defaultCv = docs.find((doc) => doc.is_default) || docs[0] || null
+      if (!defaultCv) throw new Error('Upload a CV first, then use auto-fill.')
+
+      if (!profile.cv_doc_id) {
+        profile = await api.patchUser({ cv_doc_id: defaultCv.id })
+      }
+
+      if (!hasResearchFocus(profile)) {
+        await api.extractUserProfile(() => {})
+        profile = await api.user()
+      }
+
+      const filled = researchSettingsFromProfile(profile)
+      if (!hasFilledResearchSettings(filled)) {
+        throw new Error('Quill could not find enough research-focus details in the CV yet. Add a few keywords manually or try again after extraction finishes.')
+      }
+
+      onChange({ ...s, ...filled })
+      setAutoFillMessage({ ok: true, text: 'Filled from your CV profile. Review the fields before running discovery.' })
+    } catch (e) {
+      setAutoFillMessage({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setAutoFilling(false)
+    }
   }
 
   return (
@@ -292,6 +326,29 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
                 {/* ── Research focus ── */}
                 {id === 'research' && (
                   <>
+                    <Row label="">
+                      <button
+                        onClick={autoFillResearchFocus}
+                        disabled={autoFilling}
+                        className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[12px] font-semibold transition-opacity disabled:opacity-60"
+                        style={{
+                          borderColor: 'var(--color-brand-500)',
+                          background: 'var(--color-brand-50)',
+                          color: 'var(--color-brand-700)',
+                        }}
+                      >
+                        {autoFilling ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                        {autoFilling ? 'Auto-filling...' : 'Auto-fill with Quill'}
+                      </button>
+                      {autoFillMessage && (
+                        <span
+                          className="text-[11px]"
+                          style={{ color: autoFillMessage.ok ? 'var(--color-green-700)' : 'var(--color-rose-700)' }}
+                        >
+                          {autoFillMessage.text}
+                        </span>
+                      )}
+                    </Row>
                     <Row label="Mode">
                       <div className="flex gap-1.5">
                         <Pill active={s.focus_mode === 'supplement'}
@@ -517,6 +574,84 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
 }
 
 // ─── small shared components ────────────────────────────────────────
+
+function hasResearchFocus(profile: UserProfileFull): boolean {
+  return Boolean(
+    profile.research_interests?.trim()
+    || profile.headline?.trim()
+    || profile.research_categories?.length
+    || profile.methods?.length
+    || profile.tools_frameworks?.length
+    || profile.application_domains?.length
+  )
+}
+
+function hasFilledResearchSettings(settings: Partial<DiscoverySettings>): boolean {
+  return Boolean(
+    settings.primary_keywords?.trim()
+    || settings.adjacent_areas?.trim()
+    || settings.methods_techniques?.trim()
+    || settings.application_domain?.trim()
+    || settings.target_departments?.trim()
+  )
+}
+
+function researchSettingsFromProfile(profile: UserProfileFull): Partial<DiscoverySettings> {
+  const headlineTerms = splitTerms(profile.headline)
+  const interestTerms = splitTerms(profile.research_interests)
+  const categories = splitTerms(profile.research_categories)
+  const methods = splitTerms(profile.methods)
+  const tools = splitTerms(profile.tools_frameworks)
+  const domains = splitTerms(profile.application_domains)
+  const departments = splitTerms([
+    profile.affiliation,
+    ...((profile.education || []).map((item) => item.department || item.field || item.institution)),
+    ...((profile.experience || []).map((item) => item.lab_or_group || item.employer)),
+  ])
+
+  return {
+    primary_keywords: joinTerms(uniqueTerms([...categories, ...headlineTerms, ...interestTerms]).slice(0, 12)),
+    adjacent_areas: joinTerms(uniqueTerms([...domains, ...splitTerms(profile.datasets_used)]).slice(0, 8)),
+    methods_techniques: joinTerms(uniqueTerms([
+      ...methods,
+      ...tools,
+      ...splitTerms((profile.programming_languages || []).map((item) => item.name)),
+    ]).slice(0, 12)),
+    application_domain: joinTerms(domains.slice(0, 8)),
+    target_departments: joinTerms(departments.slice(0, 8)),
+  }
+}
+
+function splitTerms(value: unknown): string[] {
+  if (!value) return []
+  if (Array.isArray(value)) return value.flatMap(splitTerms)
+  if (typeof value === 'object' && 'name' in value && typeof (value as { name?: unknown }).name === 'string') {
+    return splitTerms((value as { name: string }).name)
+  }
+  if (typeof value !== 'string') return []
+  return value
+    .replace(/[.;]/g, ',')
+    .split(/,|\n|\/|\||·/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2)
+}
+
+function uniqueTerms(items: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of items) {
+    const normalized = item.replace(/\s+/g, ' ').trim()
+    const key = normalized.toLowerCase()
+    if (!normalized || seen.has(key)) continue
+    seen.add(key)
+    out.push(normalized)
+  }
+  return out
+}
+
+function joinTerms(items: string[]): string {
+  return uniqueTerms(items).join(', ')
+}
 
 function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
