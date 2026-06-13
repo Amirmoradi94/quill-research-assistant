@@ -20,22 +20,23 @@ def default_user_data_dir() -> Path:
     if override:
         return Path(override).expanduser()
 
+    use_legacy = os.environ.get("POSTDOC_USE_LEGACY_DATA", "").lower() in {"1", "true", "yes"}
     system = platform.system()
     if system == "Darwin":
         base = Path.home() / "Library" / "Application Support"
         path = base / APP_NAME
         legacy = base / LEGACY_APP_NAME
-        return legacy if legacy.exists() and not path.exists() else path
+        return legacy if use_legacy and legacy.exists() and not path.exists() else path
     if system == "Windows":
         base = os.environ.get("APPDATA")
         root = Path(base or (Path.home() / "AppData" / "Roaming"))
         path = root / APP_NAME
         legacy = root / LEGACY_APP_NAME
-        return legacy if legacy.exists() and not path.exists() else path
+        return legacy if use_legacy and legacy.exists() and not path.exists() else path
     root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     path = root / APP_NAME
     legacy = root / LEGACY_APP_NAME
-    return legacy if legacy.exists() and not path.exists() else path
+    return legacy if use_legacy and legacy.exists() and not path.exists() else path
 
 
 def data_dir() -> Path:

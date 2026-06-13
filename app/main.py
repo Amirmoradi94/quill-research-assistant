@@ -46,7 +46,8 @@ def _ensure_ai_run_recovery_columns() -> None:
 
 
 _ensure_ai_run_recovery_columns()
-seed_if_empty()
+if not is_desktop_mode() or os.environ.get("POSTDOC_SEED_APPLICATIONS", "").lower() in {"1", "true", "yes"}:
+    seed_if_empty()
 
 app = FastAPI(title="Quill Research Assistant", version="1.0.0")
 app.include_router(quill_router)
