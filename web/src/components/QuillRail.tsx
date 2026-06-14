@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { fetchProviders, runQuill, type ProvidersStatus, type QuillEvent } from '@/lib/quill'
 import { api } from '@/lib/api'
 import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
@@ -578,7 +579,7 @@ function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: 
         className={`quill-md text-[14px] leading-[1.58] ${msg.done ? '' : 'q-cursor'}`}
         style={{ color: 'var(--color-ink-soft)' }}
       >
-        <ReactMarkdown>{ensureParagraphs(msg.text)}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{prepareMarkdown(msg.text)}</ReactMarkdown>
       </div>
 
       {msg.error && (
@@ -655,16 +656,13 @@ function ToolActivity({ tools, done }: { tools: ToolCall[]; done: boolean }) {
   )
 }
 
-// Insert double newlines between sentences that were concatenated without spacing.
-// Handles "Sentence one.Sentence two." → two paragraphs. Leaves existing markdown alone.
-function ensureParagraphs(text: string): string {
+// Keep model output renderable as Markdown while fixing a common streaming
+// artifact: separate assistant chunks can arrive as "sentence.Next sentence".
+function prepareMarkdown(text: string): string {
   if (!text) return text
-  // Already has paragraph breaks — don't touch it.
-  if (text.includes('\n\n')) return text
-  // Single newlines: convert to paragraphs.
-  if (text.includes('\n')) return text.replace(/\n(?!\n)/g, '\n\n')
-  // No newlines at all: split on ". " followed by a capital letter.
-  return text.replace(/\.\s+(?=[A-Z])/g, '.\n\n')
+  return text
+    .replace(/([.!?])(?=[A-Z0-9])/g, '$1\n\n')
+    .replace(/(:)(?=-\s|\*\s|\d+\.\s)/g, '$1\n')
 }
 
 function toolArg(input: any): string {
@@ -686,8 +684,19 @@ function splitRevealTokens(text: string): string[] {
 
 function appendMessageText(aiId: string, token: string, setMessages: SetMessages) {
   setMessages((prev) =>
-    prev.map((m) => (m.id === aiId ? { ...m, text: m.text + token } : m))
+    prev.map((m) => (m.id === aiId ? { ...m, text: mergeTextChunk(m.text, token) } : m))
   )
+}
+
+function mergeTextChunk(current: string, next: string): string {
+  if (!current || !next) return current + next
+  const last = current[current.length - 1]
+  const first = next[0]
+  if (/\s/.test(last) || /\s/.test(first)) return current + next
+  if (/^[,.;:!?)}\]]/.test(first)) return current + next
+  if (/[.!?)]/.test(last) && /^[A-Z0-9#*\-|]/.test(first)) return `${current}\n\n${next}`
+  if (last === ':' && /^(?:[-*]|\d)/.test(first)) return `${current}\n${next}`
+  return current + next
 }
 
 function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
@@ -701,7 +710,7 @@ function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
         case 'started':
           return m
         case 'text':
-          return { ...m, text: m.text + (evt.data.text || '') }
+          return { ...m, text: mergeTextChunk(m.text, evt.data.text || '') }
         case 'tool_call': {
           const tools = [...(m.tools || []), { id: evt.data.id, name: evt.data.name, input: evt.data.input, status: 'running' as const }]
           return { ...m, tools }
