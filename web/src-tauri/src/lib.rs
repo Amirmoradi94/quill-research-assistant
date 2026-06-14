@@ -1,6 +1,7 @@
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 
@@ -28,9 +29,20 @@ fn spawn_dev_backend() -> Option<Child> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarProcesses(Mutex::new(Vec::new())))
         .setup(|app| {
+            if std::env::var("QUILL_NOTIFICATION_SMOKE_TEST").ok().as_deref() == Some("1") {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Quill reminder test")
+                    .body("Desktop notifications are working.")
+                    .show();
+                eprintln!("quill notification smoke test sent");
+            }
+
             let state = app.state::<SidecarProcesses>();
             if let Ok(mut children) = state.0.lock() {
                 if let Some(scraper) = app

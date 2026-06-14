@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for the main Quill AI window.",
   "windows": ["*"],
-  "permissions": ["core:default", "shell:allow-open"]
+  "permissions": ["core:default", "shell:allow-open", "notification:default"]
 }

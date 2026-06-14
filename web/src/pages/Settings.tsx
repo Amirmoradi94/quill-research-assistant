@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, WifiOff, RefreshCw, Mail, AlertCircle, Inbox, HardDrive, Download, LogIn, ShieldCheck } from 'lucide-react'
+import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, WifiOff, RefreshCw, Mail, AlertCircle, Inbox, HardDrive, Download, LogIn, ShieldCheck, Bell } from 'lucide-react'
 import { api, type DesktopStatus, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
+import { sendTestNotification } from '@/lib/desktopNotifications'
 
 type SettingsT = {
   ai_provider: string
@@ -53,6 +54,7 @@ export function Settings() {
   const [providersLoading, setProvidersLoading] = useState(false)
   const [setupBusy, setSetupBusy] = useState<string | null>(null)
   const [setupMessage, setSetupMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const [notificationMessage, setNotificationMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const loadProviders = () => {
@@ -146,6 +148,34 @@ export function Settings() {
           </div>
         </Section>
       )}
+
+      <Section icon={<Bell size={16} />} title="Desktop notifications"
+        desc="Quill can show native macOS notifications for calendar reminders, meetings, and deadlines while the app is open.">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={async () => {
+              setNotificationMessage(null)
+              const result = await sendTestNotification()
+              setNotificationMessage({ ok: result.ok, text: result.message })
+            }}
+            className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-medium"
+            style={{
+              background: 'var(--color-paper-2)',
+              borderColor: 'var(--color-line)',
+              color: 'var(--color-ink)',
+            }}
+          >
+            <Bell size={14} />
+            Send test notification
+          </button>
+          {notificationMessage && (
+            <span className="text-[13px]"
+              style={{ color: notificationMessage.ok ? 'var(--color-green-700)' : 'var(--color-rose-700)' }}>
+              {notificationMessage.text}
+            </span>
+          )}
+        </div>
+      </Section>
 
       {/* User Profile */}
       {profile !== null && (

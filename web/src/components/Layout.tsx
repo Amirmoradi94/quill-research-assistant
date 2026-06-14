@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { QuillRail } from './QuillRail'
 import { ConfirmProvider } from './ConfirmDialog'
 import { api, type UserProfile } from '@/lib/api'
+import { startReminderNotifications } from '@/lib/desktopNotifications'
 
 const QUILL_RAIL_DEFAULT_WIDTH = 368
 const QUILL_RAIL_MIN_WIDTH = 320
@@ -30,6 +31,8 @@ export function Layout() {
   useEffect(() => {
     api.profile().then(setProfile).catch(() => {})
   }, [])
+
+  useEffect(() => startReminderNotifications(), [])
 
   useEffect(() => {
     if (location.pathname === '/setup') return
