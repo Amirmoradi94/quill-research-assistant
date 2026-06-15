@@ -350,8 +350,10 @@ def list_drafts(professor_id: Optional[int] = None, q: Optional[str] = None, db:
 class GenerateDraftsBody(BaseModel):
     professor_ids: Optional[List[int]] = None
     limit: int = 5
+    user_instructions: Optional[str] = None
 
 
+@app.post("/api/draft-generation", status_code=202)
 @app.post("/api/drafts/generate", status_code=202)
 def generate_missing_drafts(
     payload: GenerateDraftsBody,
@@ -388,9 +390,11 @@ def generate_missing_drafts(
             targets.append(prof)
 
     runs = []
+    user_instructions = (payload.user_instructions or "").strip()
     for prof in targets:
         req = RunIn(
             workflow="draft_email",
+            params={"user_instructions": user_instructions} if user_instructions else {},
             professor_id=prof.id,
             max_turns=12,
             timeout_s=300,

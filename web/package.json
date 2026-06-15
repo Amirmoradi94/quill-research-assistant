@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "desktop:dev": "npx --yes @tauri-apps/cli@2 dev",
-    "desktop:build": "npx --yes @tauri-apps/cli@2 build"
+    "desktop:build": "../scripts/build_backend_sidecar.sh && npx --yes @tauri-apps/cli@2 build"
   },
   "dependencies": {
     "@tauri-apps/plugin-notification": "^2.3.3",

@@ -35,6 +35,8 @@ export function Drafts() {
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [generatingDrafts, setGeneratingDrafts] = useState(false)
+  const [draftBatchSize, setDraftBatchSize] = useState(5)
+  const [draftInstructions, setDraftInstructions] = useState('')
   const [redraftFor, setRedraftFor] = useState<Draft | null>(null)
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null)
   const confirm = useConfirm()
@@ -111,7 +113,7 @@ export function Drafts() {
   }
 
   const createDraftBatch = async () => {
-    const batch = draftTargets.slice(0, 5)
+    const batch = draftTargets.slice(0, draftBatchSize)
     if (batch.length === 0) return
     const ok = await confirm({
       title: `Create ${batch.length} draft${batch.length === 1 ? '' : 's'} with Quill?`,
@@ -123,7 +125,11 @@ export function Drafts() {
     if (!ok) return
     setGeneratingDrafts(true)
     try {
-      const result = await api.generateDrafts({ professor_ids: batch.map((p) => p.id), limit: batch.length })
+      const result = await api.generateDrafts({
+        professor_ids: batch.map((p) => p.id),
+        limit: batch.length,
+        user_instructions: draftInstructions.trim() || undefined,
+      })
       setToastTimed({
         ok: true,
         text: result.started
@@ -302,6 +308,10 @@ export function Drafts() {
         <DraftGenerationPanel
           targets={draftTargets}
           generating={generatingDrafts}
+          batchSize={draftBatchSize}
+          instructions={draftInstructions}
+          onBatchSizeChange={setDraftBatchSize}
+          onInstructionsChange={setDraftInstructions}
           onCreate={createDraftBatch}
         />
 
@@ -354,42 +364,80 @@ export function Drafts() {
 function DraftGenerationPanel({
   targets,
   generating,
+  batchSize,
+  instructions,
+  onBatchSizeChange,
+  onInstructionsChange,
   onCreate,
 }: {
   targets: Professor[]
   generating: boolean
+  batchSize: number
+  instructions: string
+  onBatchSizeChange: (n: number) => void
+  onInstructionsChange: (value: string) => void
   onCreate: () => void
 }) {
-  const nextCount = Math.min(5, targets.length)
+  const nextCount = Math.min(batchSize, targets.length)
   return (
-    <section className="rounded-md border p-3 mb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+    <section className="rounded-md border p-3 mb-3"
       style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <Sparkles size={14} style={{ color: 'var(--color-brand-600)' }} />
-          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>
-            Create drafts with Quill
-          </h2>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Sparkles size={14} style={{ color: 'var(--color-brand-600)' }} />
+            <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>
+              Create drafts with Quill
+            </h2>
+          </div>
+          <p className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+            {targets.length > 0
+              ? `${targets.length} accepted professor${targets.length === 1 ? '' : 's'} do not have email drafts yet. Choose a batch size and instructions before starting.`
+              : 'All accepted professors currently have drafts, or no accepted professors are ready for drafting.'}
+          </p>
         </div>
-        <p className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
-          {targets.length > 0
-            ? `${targets.length} accepted professor${targets.length === 1 ? '' : 's'} do not have email drafts yet. Run draft creation when you are ready.`
-            : 'All accepted professors currently have drafts, or no accepted professors are ready for drafting.'}
-        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <label className="text-[11px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>
+            Batch
+          </label>
+          <select
+            value={batchSize}
+            onChange={(e) => onBatchSizeChange(Number(e.target.value))}
+            disabled={generating}
+            className="rounded-md border px-2 py-1.5 text-[12px] outline-none disabled:opacity-60"
+            style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }}
+          >
+            {[1, 3, 5, 10, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <button
+            onClick={onCreate}
+            disabled={generating || targets.length === 0}
+            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium disabled:opacity-50"
+            style={{
+              background: targets.length > 0 ? 'var(--color-ink)' : 'var(--color-paper-2)',
+              borderColor: 'var(--color-line)',
+              color: targets.length > 0 ? 'var(--color-white)' : 'var(--color-muted)',
+            }}
+          >
+            {generating ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {generating ? 'Starting...' : targets.length > 0 ? `Create next ${nextCount}` : 'No drafts needed'}
+          </button>
+        </div>
       </div>
-      <button
-        onClick={onCreate}
-        disabled={generating || targets.length === 0}
-        className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium shrink-0 disabled:opacity-50"
+      <textarea
+        value={instructions}
+        onChange={(e) => onInstructionsChange(e.target.value)}
+        disabled={generating}
+        rows={2}
+        className="mt-3 w-full resize-y rounded-md border px-3 py-2 text-[13px] outline-none disabled:opacity-60"
         style={{
-          background: targets.length > 0 ? 'var(--color-ink)' : 'var(--color-paper-2)',
+          background: 'var(--color-paper)',
           borderColor: 'var(--color-line)',
-          color: targets.length > 0 ? 'var(--color-white)' : 'var(--color-muted)',
+          color: 'var(--color-ink)',
+          lineHeight: 1.45,
         }}
-      >
-        {generating ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
-        {generating ? 'Starting...' : targets.length > 0 ? `Create next ${nextCount}` : 'No drafts needed'}
-      </button>
+        placeholder="Optional instructions for this batch, e.g. make it concise, emphasize autonomous driving, mention my CV attachment, avoid saying I am available immediately..."
+      />
     </section>
   )
 }
