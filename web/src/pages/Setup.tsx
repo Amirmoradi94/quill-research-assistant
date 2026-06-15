@@ -95,6 +95,7 @@ export function Setup() {
 
   const activeProvider = state.providers?.active || state.desktop?.providers.active || ''
   const hasProvider = !!activeProvider
+  const backendStarting = !!error?.startsWith('Local backend')
   const defaultCv = useMemo(
     () => state.documents.find((doc) => doc.is_default) || state.documents[0] || null,
     [state.documents],
@@ -206,8 +207,12 @@ export function Setup() {
 
         {error && (
           <div className="flex items-start gap-2 rounded-md border px-3 py-2 text-[13px]"
-            style={{ borderColor: 'var(--color-rose-200)', background: 'var(--color-rose-50)', color: 'var(--color-rose-700)' }}>
-            <AlertCircle size={15} className="mt-0.5 shrink-0" />
+            style={{
+              borderColor: backendStarting ? 'var(--color-amber-200)' : 'var(--color-rose-200)',
+              background: backendStarting ? 'var(--color-amber-50)' : 'var(--color-rose-50)',
+              color: backendStarting ? 'var(--color-amber-700)' : 'var(--color-rose-700)',
+            }}>
+            {backendStarting ? <RefreshCw size={15} className="mt-0.5 shrink-0 animate-spin" /> : <AlertCircle size={15} className="mt-0.5 shrink-0" />}
             <span>{error}</span>
           </div>
         )}
@@ -217,8 +222,8 @@ export function Setup() {
             <SetupCard
               icon={<HardDrive size={18} />}
               title="Local app storage"
-              status={state.desktop ? 'ready' : loading ? 'checking' : 'needs_attention'}
-              detail={state.desktop ? 'Backend and local storage are available.' : 'The local backend is not responding yet.'}
+              status={state.desktop ? 'ready' : loading || backendStarting ? 'checking' : 'needs_attention'}
+              detail={state.desktop ? 'Backend and local storage are available.' : loading || backendStarting ? 'Starting local backend...' : 'The local backend is not responding yet.'}
             >
               <div className="grid gap-2 text-[13px]">
                 <InfoRow label="Mode" value={state.desktop?.desktop_mode ? 'Desktop app' : state.desktop ? 'Browser development' : 'Checking'} />
