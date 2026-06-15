@@ -2,8 +2,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
+use tauri_plugin_shell::ShellExt;
 
 enum SidecarChild {
     Sidecar(CommandChild),
@@ -11,6 +11,17 @@ enum SidecarChild {
 }
 
 struct SidecarProcesses(Mutex<Vec<SidecarChild>>);
+
+fn stop_stale_sidecars() {
+    for process_name in ["postdoc-backend", "postdoc-scraper"] {
+        let _ = Command::new("/usr/bin/pkill")
+            .arg("-x")
+            .arg(process_name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
 
 fn spawn_dev_backend() -> Option<Child> {
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -33,7 +44,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarProcesses(Mutex::new(Vec::new())))
         .setup(|app| {
-            if std::env::var("QUILL_NOTIFICATION_SMOKE_TEST").ok().as_deref() == Some("1") {
+            stop_stale_sidecars();
+
+            if std::env::var("QUILL_NOTIFICATION_SMOKE_TEST")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
                 let _ = app
                     .notification()
                     .builder()
@@ -49,7 +66,13 @@ pub fn run() {
                     .shell()
                     .sidecar("postdoc-scraper")
                     .ok()
-                    .and_then(|command| command.env("POSTDOC_DESKTOP", "1").env("SCRAPER_PORT", "8001").spawn().ok())
+                    .and_then(|command| {
+                        command
+                            .env("POSTDOC_DESKTOP", "1")
+                            .env("SCRAPER_PORT", "8001")
+                            .spawn()
+                            .ok()
+                    })
                     .map(|(_, child)| SidecarChild::Sidecar(child))
                 {
                     children.push(scraper);
