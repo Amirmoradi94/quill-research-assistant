@@ -41,22 +41,27 @@ export function Drafts() {
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null)
   const confirm = useConfirm()
 
-  const reload = () => {
-    Promise.all([
-      api.drafts(),
-      api.professors({ status: 'drafting' }),
-    ])
-      .then(([rows, professors]) => {
-        const activeDraftProfessorIds = new Set(rows.filter((d) => !d.sent_at).map((d) => d.professor_id))
-        setDrafts(rows)
+  const reload = async () => {
+    try {
+      const rows = await api.drafts()
+      setDrafts(rows)
+      setErr(null)
+
+      const activeDraftProfessorIds = new Set(rows.filter((d) => !d.sent_at).map((d) => d.professor_id))
+      try {
+        const professors = await api.professors({ status: 'drafting' })
         setDraftTargets(professors.filter((p) => (
           !p.is_suggested
           && !p.dismissed_at
           && !activeDraftProfessorIds.has(p.id)
         )))
-        setErr(null)
-      })
-      .catch((e) => setErr(String(e)))
+      } catch (e) {
+        setDraftTargets([])
+        setErr(`Drafts loaded, but the draft creation queue could not refresh. ${errorMessage(e)}`)
+      }
+    } catch (e) {
+      setErr(errorMessage(e))
+    }
     api.settings().then((s) => setGmailConnected(!!s.gmail_connected)).catch(() => {})
   }
 
@@ -359,6 +364,10 @@ export function Drafts() {
       )}
     </div>
   )
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
 }
 
 function DraftGenerationPanel({

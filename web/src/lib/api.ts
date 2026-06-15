@@ -498,10 +498,18 @@ export type BatchParams = {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(apiUrl(path), {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-  })
+  let r: Response
+  try {
+    r = await fetch(apiUrl(path), {
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    })
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e)
+    throw new Error(
+      `Local backend is not reachable while loading ${path}. Wait a few seconds, then click Refresh.${raw ? ` (${raw})` : ''}`,
+    )
+  }
   if (!r.ok) {
     throw new Error(`${r.status} ${r.statusText} · ${path}`)
   }
