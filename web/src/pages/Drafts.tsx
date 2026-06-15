@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type Draft } from '@/lib/api'
+import { api, type Draft, type Professor } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -25,6 +25,7 @@ type IconComponent = ComponentType<{ size?: number; className?: string; style?: 
 
 export function Drafts() {
   const [drafts, setDrafts] = useState<Draft[]>([])
+  const [draftTargets, setDraftTargets] = useState<Professor[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [category, setCategory] = useState('')
@@ -33,14 +34,24 @@ export function Drafts() {
   const [gmailConnected, setGmailConnected] = useState(false)
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [generatingDrafts, setGeneratingDrafts] = useState(false)
   const [redraftFor, setRedraftFor] = useState<Draft | null>(null)
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null)
   const confirm = useConfirm()
 
   const reload = () => {
-    api.drafts()
-      .then((rows) => {
+    Promise.all([
+      api.drafts(),
+      api.professors({ status: 'drafting' }),
+    ])
+      .then(([rows, professors]) => {
+        const activeDraftProfessorIds = new Set(rows.filter((d) => !d.sent_at).map((d) => d.professor_id))
         setDrafts(rows)
+        setDraftTargets(professors.filter((p) => (
+          !p.is_suggested
+          && !p.dismissed_at
+          && !activeDraftProfessorIds.has(p.id)
+        )))
         setErr(null)
       })
       .catch((e) => setErr(String(e)))
@@ -97,6 +108,34 @@ export function Drafts() {
 
   const patchDraftInState = (updated: Draft) => {
     setDrafts((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)))
+  }
+
+  const createDraftBatch = async () => {
+    const batch = draftTargets.slice(0, 5)
+    if (batch.length === 0) return
+    const ok = await confirm({
+      title: `Create ${batch.length} draft${batch.length === 1 ? '' : 's'} with Quill?`,
+      detail: `${draftTargets.length} accepted professor${draftTargets.length === 1 ? '' : 's'} need drafts`,
+      message: 'Quill will start background AI runs for the next batch. Drafts appear here as each run finishes.',
+      variant: 'primary',
+      confirmLabel: 'Create drafts',
+    })
+    if (!ok) return
+    setGeneratingDrafts(true)
+    try {
+      const result = await api.generateDrafts({ professor_ids: batch.map((p) => p.id), limit: batch.length })
+      setToastTimed({
+        ok: true,
+        text: result.started
+          ? `Started ${result.started} draft generation run${result.started === 1 ? '' : 's'}.`
+          : 'No eligible professors need drafts.',
+      })
+      reload()
+    } catch (e: any) {
+      setToastTimed({ ok: false, text: e?.message || String(e) })
+    } finally {
+      setGeneratingDrafts(false)
+    }
   }
 
   const markSent = async (draft: Draft) => {
@@ -260,6 +299,12 @@ export function Drafts() {
           </div>
         )}
 
+        <DraftGenerationPanel
+          targets={draftTargets}
+          generating={generatingDrafts}
+          onCreate={createDraftBatch}
+        />
+
         <FilterBar
           q={q}
           setQ={setQ}
@@ -303,6 +348,49 @@ export function Drafts() {
         />
       )}
     </div>
+  )
+}
+
+function DraftGenerationPanel({
+  targets,
+  generating,
+  onCreate,
+}: {
+  targets: Professor[]
+  generating: boolean
+  onCreate: () => void
+}) {
+  const nextCount = Math.min(5, targets.length)
+  return (
+    <section className="rounded-md border p-3 mb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <Sparkles size={14} style={{ color: 'var(--color-brand-600)' }} />
+          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>
+            Create drafts with Quill
+          </h2>
+        </div>
+        <p className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+          {targets.length > 0
+            ? `${targets.length} accepted professor${targets.length === 1 ? '' : 's'} do not have email drafts yet. Run draft creation when you are ready.`
+            : 'All accepted professors currently have drafts, or no accepted professors are ready for drafting.'}
+        </p>
+      </div>
+      <button
+        onClick={onCreate}
+        disabled={generating || targets.length === 0}
+        className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium shrink-0 disabled:opacity-50"
+        style={{
+          background: targets.length > 0 ? 'var(--color-ink)' : 'var(--color-paper-2)',
+          borderColor: 'var(--color-line)',
+          color: targets.length > 0 ? 'var(--color-white)' : 'var(--color-muted)',
+        }}
+      >
+        {generating ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
+        {generating ? 'Starting...' : targets.length > 0 ? `Create next ${nextCount}` : 'No drafts needed'}
+      </button>
+    </section>
   )
 }
 

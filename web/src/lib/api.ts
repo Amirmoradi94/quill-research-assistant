@@ -523,6 +523,10 @@ export const api = {
   professor: (id: number) => request<Professor>(`/api/professors/${id}`),
   professorPapers: (id: number) => request<ProfessorPaper[]>(`/api/professors/${id}/papers`),
   drafts: () => request<Draft[]>('/api/drafts'),
+  generateDrafts: (payload: { professor_ids?: number[]; limit?: number }) =>
+    request<{ ok: boolean; started: number; remaining: number; runs: Array<{
+      run_id: number; professor_id: number; professor_name: string; provider: string
+    }> }>('/api/drafts/generate', { method: 'POST', body: JSON.stringify(payload) }),
   draft: (id: number) => request<Draft>(`/api/drafts/${id}`),
   patchDraft: (id: number, patch: { subject?: string; body?: string }) =>
     request<Draft>(`/api/drafts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

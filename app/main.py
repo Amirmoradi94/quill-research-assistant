@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
 from . import models, schemas
 from .seed import seed_if_empty
-from .quill import router as quill_router
+from .quill import RunIn, _drain_run, _prepare_ai_run, router as quill_router
 from .documents import router as documents_router
 from .user_profile import router as user_router
 from . import scoring
@@ -345,6 +345,74 @@ def list_drafts(professor_id: Optional[int] = None, q: Optional[str] = None, db:
         )
     out.sort(key=lambda d: (category_order.get(d.professor_research_category, 99), d.professor_name.lower()))
     return out
+
+
+class GenerateDraftsBody(BaseModel):
+    professor_ids: Optional[List[int]] = None
+    limit: int = 5
+
+
+@app.post("/api/drafts/generate", status_code=202)
+def generate_missing_drafts(
+    payload: GenerateDraftsBody,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """User-triggered draft generation for accepted professors without active drafts."""
+    limit = max(1, min(payload.limit or 5, 20))
+    active_draft_professor_ids = {
+        row[0]
+        for row in db.query(models.EmailDraft.professor_id)
+        .filter(
+            models.EmailDraft.is_backup == False,  # noqa: E712
+            models.EmailDraft.sent_at.is_(None),
+        )
+        .all()
+    }
+
+    query = db.query(models.Professor).filter(
+        models.Professor.status == "drafting",
+        models.Professor.is_suggested == False,  # noqa: E712
+        models.Professor.dismissed_at.is_(None),
+    )
+    if payload.professor_ids:
+        query = query.filter(models.Professor.id.in_(payload.professor_ids))
+
+    targets = []
+    eligible_total = 0
+    for prof in query.order_by(models.Professor.match_score.desc().nullslast(), models.Professor.name.asc()).all():
+        if prof.id in active_draft_professor_ids:
+            continue
+        eligible_total += 1
+        if len(targets) < limit:
+            targets.append(prof)
+
+    runs = []
+    for prof in targets:
+        req = RunIn(
+            workflow="draft_email",
+            professor_id=prof.id,
+            max_turns=12,
+            timeout_s=300,
+        )
+        ai_run, run_request, provider, cli_path = _prepare_ai_run(db, req)
+        background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path)
+        runs.append({
+            "run_id": ai_run.id,
+            "professor_id": prof.id,
+            "professor_name": prof.name,
+            "provider": ai_run.provider,
+        })
+
+    if runs:
+        _log(db, f"Started {len(runs)} user-requested draft generation run(s)")
+
+    return {
+        "ok": True,
+        "started": len(runs),
+        "remaining": max(0, eligible_total - len(runs)),
+        "runs": runs,
+    }
 
 
 @app.post("/api/drafts", response_model=schemas.DraftOut, status_code=201)
