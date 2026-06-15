@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, Mail, Edit2, Check, X, Sparkles, Loader, ChevronDown, ChevronUp, AlertCircle, BookOpen, Building2, Tag, GraduationCap, Lightbulb, MessageCircle, FileText, Briefcase } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Mail, Edit2, Check, X, Sparkles, Loader, ChevronDown, ChevronUp, ChevronRight, AlertCircle, BookOpen, Building2, Tag, GraduationCap, Lightbulb, MessageCircle, FileText, Briefcase } from 'lucide-react'
 import { api, type Professor, type UserProfile } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
@@ -39,6 +39,7 @@ export function ProfessorDetail() {
   const draftRun = useQuillRun()
   const [showResearchLog, setShowResearchLog] = useState(false)
   const [showDraftLog, setShowDraftLog] = useState(false)
+  const [draftInstructions, setDraftInstructions] = useState('')
 
   const reload = async () => {
     if (!id) return
@@ -51,6 +52,7 @@ export function ProfessorDetail() {
       setProf(p)
       setDraft(d)
       setPapers(papersList)
+      return d
     } catch (e) { setErr(String(e)) }
   }
 
@@ -81,6 +83,18 @@ export function ProfessorDetail() {
       body: JSON.stringify({ [field]: value }),
     })
     if (r.ok) { setEditing(null); reload() }
+  }
+
+  const startDraftEmail = async () => {
+    if (!prof || draftRun.state === 'running') return
+    setShowDraftLog(true)
+    const result = await draftRun.start({
+      workflow: 'draft_email',
+      professor_id: prof.id,
+      params: draftInstructions.trim() ? { user_instructions: draftInstructions.trim() } : {},
+    })
+    const nextDraft = await reload()
+    if (result === 'done' && nextDraft) setActiveTab('draft')
   }
 
   if (err) return (
@@ -122,7 +136,7 @@ export function ProfessorDetail() {
             </button>
             <button
               disabled={draftRun.state === 'running'}
-              onClick={() => draftRun.start({ workflow: 'draft_email', professor_id: prof.id }).then(reload)}
+              onClick={startDraftEmail}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[13px] font-medium border"
               style={{ borderColor: 'var(--color-brand-400)', color: 'var(--color-brand-700)', background: 'var(--color-brand-50)' }}>
               {draftRun.state === 'running'
@@ -185,6 +199,17 @@ export function ProfessorDetail() {
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'overview' && (
             <div className="max-w-4xl">
+              <DraftEmailControl
+                draft={draft}
+                instructions={draftInstructions}
+                setInstructions={setDraftInstructions}
+                draftRun={draftRun}
+                showLog={showDraftLog}
+                setShowLog={setShowDraftLog}
+                onDraft={startDraftEmail}
+                onOpenDraft={() => setActiveTab('draft')}
+              />
+
               {researchRun.state !== 'idle' && (
                 <div className="rounded-md border px-3 py-2.5 mb-4 text-[13px]"
                   style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
@@ -353,7 +378,7 @@ export function ProfessorDetail() {
             </div>
           )}
 
-          {activeTab === 'draft' && draft && (
+          {activeTab === 'draft' && (
             <div className="max-w-4xl">
               {draftRun.state !== 'idle' && (
                 <div className="rounded-md border px-3 py-2.5 mb-4 text-[13px]"
@@ -384,23 +409,138 @@ export function ProfessorDetail() {
                   )}
                 </div>
               )}
-              <div className="rounded-md border p-4"
-                style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <Mail size={14} style={{ color: 'var(--color-brand-600)' }} />
-                  <div className="text-[15px] font-semibold" style={{ color: 'var(--color-ink)' }}>Draft email</div>
-                  <div className="text-[14px] ml-auto" style={{ color: 'var(--color-muted)' }}>{draft.subject}</div>
+              {draft ? (
+                <div className="rounded-md border p-4"
+                  style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Mail size={14} style={{ color: 'var(--color-brand-600)' }} />
+                    <div className="text-[15px] font-semibold" style={{ color: 'var(--color-ink)' }}>Draft email</div>
+                    <div className="text-[14px] ml-auto" style={{ color: 'var(--color-muted)' }}>{draft.subject}</div>
+                  </div>
+                  <pre className="text-[15px] whitespace-pre-wrap font-sans max-h-96 overflow-y-auto"
+                    style={{ color: 'var(--color-ink-soft)', lineHeight: 1.55 }}>
+                    {draft.body}
+                  </pre>
                 </div>
-                <pre className="text-[15px] whitespace-pre-wrap font-sans max-h-96 overflow-y-auto"
-                  style={{ color: 'var(--color-ink-soft)', lineHeight: 1.55 }}>
-                  {draft.body}
-                </pre>
-              </div>
+              ) : (
+                <div className="rounded-md border p-6 text-[14px]"
+                  style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-muted)' }}>
+                  No draft exists yet. Use the draft controls on the Overview tab to create one.
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+function DraftEmailControl({
+  draft,
+  instructions,
+  setInstructions,
+  draftRun,
+  showLog,
+  setShowLog,
+  onDraft,
+  onOpenDraft,
+}: {
+  draft: { id: number; subject: string; body: string } | null
+  instructions: string
+  setInstructions: (value: string) => void
+  draftRun: ReturnType<typeof useQuillRun>
+  showLog: boolean
+  setShowLog: (value: boolean) => void
+  onDraft: () => void
+  onOpenDraft: () => void
+}) {
+  const running = draftRun.state === 'running'
+  return (
+    <SectionCard icon={<Mail size={15} />} title="Draft email">
+      <div className="space-y-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <div className="text-[14px] leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
+              Create or replace the active outreach draft for this professor. Quill will use your profile,
+              this professor's research record, saved papers, and the instructions below.
+            </div>
+            {draft && (
+              <button onClick={onOpenDraft}
+                className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium"
+                style={{ color: 'var(--color-brand-600)' }}>
+                Open current draft <ChevronRight size={12} />
+              </button>
+            )}
+          </div>
+          <button
+            onClick={onDraft}
+            disabled={running}
+            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-[12px] font-medium disabled:opacity-60"
+            style={{
+              background: 'var(--color-ink)',
+              borderColor: 'var(--color-ink)',
+              color: 'var(--color-white)',
+            }}
+          >
+            {running ? <Loader size={13} className="animate-spin" /> : <Mail size={13} />}
+            {running ? 'Drafting...' : draft ? 'Redraft email' : 'Draft email'}
+          </button>
+        </div>
+
+        <textarea
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          disabled={running}
+          rows={2}
+          className="w-full resize-y rounded-md border px-3 py-2 text-[13px] outline-none disabled:opacity-60"
+          style={{
+            background: 'var(--color-paper)',
+            borderColor: 'var(--color-line)',
+            color: 'var(--color-ink)',
+            lineHeight: 1.45,
+          }}
+          placeholder="Optional instructions, e.g. make it concise, emphasize autonomous driving, mention I attached my CV, avoid saying I am available immediately..."
+        />
+
+        {draftRun.state !== 'idle' && (
+          <div className="rounded-md border px-3 py-2.5 text-[13px]"
+            style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
+            {draftRun.state === 'running' && (
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5" style={{ color: 'var(--color-brand-600)' }}>
+                  <Loader size={11} className="animate-spin" /> Quill is drafting the email...
+                </div>
+                <button onClick={() => setShowLog(!showLog)} style={{ color: 'var(--color-muted)' }}>
+                  {showLog ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+            )}
+            {draftRun.state === 'done' && (
+              <div className="flex items-center gap-1.5" style={{ color: 'var(--color-green-700)' }}>
+                <Check size={12} /> Email draft ready
+              </div>
+            )}
+            {draftRun.state === 'error' && (
+              <div className="flex items-center gap-1.5" style={{ color: 'var(--color-rose-700)' }}>
+                <AlertCircle size={11} /> {draftRun.error}
+              </div>
+            )}
+            {draftRun.state === 'cancelled' && (
+              <div className="flex items-center gap-1.5" style={{ color: 'var(--color-muted)' }}>
+                <X size={11} /> Drafting stopped
+              </div>
+            )}
+            {showLog && draftRun.logText && (
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded p-2 font-mono text-[12px]"
+                style={{ background: 'var(--color-paper-2)', color: 'var(--color-ink-soft)' }}>
+                {draftRun.logText}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+    </SectionCard>
   )
 }
 
