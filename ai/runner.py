@@ -14,8 +14,11 @@ management — this module never touches the database.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -55,6 +58,41 @@ FALLBACK_CHAIN: tuple[Provider, ...] = (
     Provider.ANTHROPIC_API,
     Provider.OPENAI_API,
 )
+
+
+def resolve_cli_path(command: str, configured_path: str | None = None) -> str | None:
+    """Find a provider CLI even when the desktop app has a minimal PATH."""
+    if configured_path:
+        return configured_path
+
+    path = shutil.which(command)
+    if path:
+        return path
+
+    home = Path.home()
+    for directory in (
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        home / ".local" / "bin",
+        home / ".npm-global" / "bin",
+        home / ".codex" / "bin",
+        home / ".claude" / "local",
+        home / ".claude" / "bin",
+    ):
+        candidate = directory / command
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
+    try:
+        found = subprocess.run(
+            ["/bin/zsh", "-lc", f"command -v {shlex.quote(command)}"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return None
+    return found.stdout.strip().splitlines()[0] if found.returncode == 0 and found.stdout.strip() else None
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -118,10 +156,10 @@ def select_provider(
 
     for p in chain:
         if p == Provider.CLAUDE_CLI:
-            if claude_cli_path or shutil.which("claude"):
+            if resolve_cli_path("claude", claude_cli_path):
                 return p
         elif p == Provider.CODEX_CLI:
-            if codex_cli_path or shutil.which("codex"):
+            if resolve_cli_path("codex", codex_cli_path):
                 return p
         elif p == Provider.ANTHROPIC_API:
             if anthropic_api_key:
@@ -186,7 +224,7 @@ def claude_cli_argv(
     max_turns: int,
     cli_path: str | None,
 ) -> list[str]:
-    argv = [cli_path or "claude", "--print", prompt, "--output-format", "stream-json", "--verbose"]
+    argv = [resolve_cli_path("claude", cli_path) or "claude", "--print", prompt, "--output-format", "stream-json", "--verbose"]
     if allowed_tools:
         argv += ["--allowed-tools", ",".join(allowed_tools)]
     if max_turns:
@@ -204,7 +242,7 @@ def codex_cli_argv(
 ) -> list[str]:
     """Codex CLI JSONL streaming command."""
     argv = [
-        cli_path or "codex",
+        resolve_cli_path("codex", cli_path) or "codex",
         "exec",
         "--json",
         "--sandbox",

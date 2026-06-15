@@ -23,7 +23,6 @@ import os
 import platform
 import re
 import shlex
-import shutil
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -51,6 +50,7 @@ from ai.runner import (  # noqa: E402
     StreamEvent,
     Workflow,
     render_prompt,
+    resolve_cli_path,
     select_provider,
     stream as runner_stream,
 )
@@ -200,7 +200,7 @@ def _provider_setup_status(provider: str, configured_path: str | None = None) ->
 
     command = "claude" if provider == "claude_cli" else "codex"
     label = "Claude Code" if provider == "claude_cli" else "Codex"
-    path = configured_path or shutil.which(command)
+    path = resolve_cli_path(command, configured_path)
     status: dict[str, Any] = {
         "provider": provider,
         "label": label,
@@ -268,12 +268,15 @@ def _open_setup_command_in_terminal(command: str) -> None:
         "  activate\n"
         "end tell\n"
     )
-    subprocess.Popen(
+    result = subprocess.run(
         ["osascript", "-e", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "macOS did not allow Quill to open Terminal.").strip()
+        raise HTTPException(500, f"Could not open Terminal: {detail}")
 
 
 def _setup_terminal_command(provider: str, action: str) -> str:
@@ -1381,8 +1384,8 @@ def _prepare_ai_run(
         raise HTTPException(503, "No AI provider available. Install Claude or Codex CLI, or configure an API key in Settings.")
 
     cli_path = (
-        settings.claude_cli_path if provider == Provider.CLAUDE_CLI else
-        settings.codex_cli_path  if provider == Provider.CODEX_CLI  else
+        resolve_cli_path("claude", settings.claude_cli_path) if provider == Provider.CLAUDE_CLI else
+        resolve_cli_path("codex", settings.codex_cli_path) if provider == Provider.CODEX_CLI else
         None
     )
 
@@ -1569,17 +1572,18 @@ def list_runs(limit: int = 50, db: Session = Depends(get_db)):
 @router.get("/providers")
 def providers_status(db: Session = Depends(get_db)):
     """Tells the UI which providers are available right now."""
-    import shutil
     s = _settings(db)
+    claude_path = resolve_cli_path("claude", s.claude_cli_path)
+    codex_path = resolve_cli_path("codex", s.codex_cli_path)
     return {
         "selected_default": s.ai_provider,
         "claude_cli": {
-            "available": bool(shutil.which("claude") or s.claude_cli_path),
-            "path": s.claude_cli_path or shutil.which("claude"),
+            "available": bool(claude_path),
+            "path": claude_path,
         },
         "codex_cli": {
-            "available": bool(shutil.which("codex") or s.codex_cli_path),
-            "path": s.codex_cli_path or shutil.which("codex"),
+            "available": bool(codex_path),
+            "path": codex_path,
         },
         "anthropic_api": {"configured": bool(s.anthropic_api_key)},
         "openai_api": {"configured": bool(s.openai_api_key)},

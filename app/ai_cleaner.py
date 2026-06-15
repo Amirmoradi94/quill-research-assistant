@@ -18,12 +18,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import shutil
 from typing import Optional
 
 import httpx
 
 from . import models
+from ai.runner import resolve_cli_path
 
 
 SYSTEM_PROMPT = (
@@ -119,14 +119,14 @@ async def _run_subprocess(argv: list[str]) -> Optional[str]:
 
 
 async def _clean_via_claude_cli(prompt: str, cli_path: str | None) -> Optional[str]:
-    binary = cli_path or shutil.which("claude")
+    binary = resolve_cli_path("claude", cli_path)
     if not binary:
         return None
     return await _run_subprocess([binary, "--print", prompt])
 
 
 async def _clean_via_codex_cli(prompt: str, cli_path: str | None) -> Optional[str]:
-    binary = cli_path or shutil.which("codex")
+    binary = resolve_cli_path("codex", cli_path)
     if not binary:
         return None
     return await _run_subprocess([binary, "exec", prompt])

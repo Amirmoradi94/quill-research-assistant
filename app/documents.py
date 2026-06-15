@@ -222,6 +222,7 @@ def _run_profile_extraction_silently() -> None:
         _settings, _select_provider_for, _resolve_user_context,
         _run_and_stream, RunRequest, Workflow,
     )
+    from ai.runner import resolve_cli_path
 
     db = SessionLocal()
     try:
@@ -230,8 +231,8 @@ def _run_profile_extraction_silently() -> None:
         if provider is None:
             return  # no provider configured — silently no-op
         cli_path = (
-            settings.claude_cli_path if provider.value == "claude_cli" else
-            settings.codex_cli_path  if provider.value == "codex_cli"  else
+            resolve_cli_path("claude", settings.claude_cli_path) if provider.value == "claude_cli" else
+            resolve_cli_path("codex", settings.codex_cli_path) if provider.value == "codex_cli" else
             None
         )
 

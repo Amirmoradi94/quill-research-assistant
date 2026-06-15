@@ -110,7 +110,10 @@ export function Settings() {
     setSetupMessage(null)
     try {
       const result = await api.providerSetupAction(provider, action)
-      setSetupMessage({ ok: true, text: `${result.message} Complete the Terminal/browser steps, then click Recheck.` })
+      setSetupMessage({
+        ok: true,
+        text: `${result.message} A Terminal window should be open now. Complete the Terminal/browser steps, then click Recheck. If no Terminal window appears, macOS may be blocking Quill from controlling Terminal; allow it in System Settings > Privacy & Security > Automation.`,
+      })
       window.setTimeout(loadProviders, 2500)
     } catch (e: any) {
       setSetupMessage({ ok: false, text: e?.message || String(e) })

@@ -99,10 +99,12 @@ def health():
 def desktop_status(db: Session = Depends(get_db)):
     """Runtime status used by the desktop shell and first-run setup."""
     from .quill import _select_provider_for, _settings
-    import shutil
+    from ai.runner import resolve_cli_path
 
     settings = _settings(db)
     active = _select_provider_for(settings)
+    claude_path = resolve_cli_path("claude", settings.claude_cli_path)
+    codex_path = resolve_cli_path("codex", settings.codex_cli_path)
     return {
         "ok": True,
         "desktop_mode": is_desktop_mode(),
@@ -113,12 +115,12 @@ def desktop_status(db: Session = Depends(get_db)):
             "selected_default": settings.ai_provider,
             "active": active.value if active else None,
             "claude_cli": {
-                "available": bool(settings.claude_cli_path or shutil.which("claude")),
-                "path": settings.claude_cli_path or shutil.which("claude"),
+                "available": bool(claude_path),
+                "path": claude_path,
             },
             "codex_cli": {
-                "available": bool(settings.codex_cli_path or shutil.which("codex")),
-                "path": settings.codex_cli_path or shutil.which("codex"),
+                "available": bool(codex_path),
+                "path": codex_path,
             },
             "anthropic_api": {"configured": bool(settings.anthropic_api_key)},
             "openai_api": {"configured": bool(settings.openai_api_key)},
@@ -1134,7 +1136,7 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
     """Run the draft_reply Quill workflow to completion and return {subject, body}."""
     from .quill import _settings, _select_provider_for, _shim
     from ai.runner import (
-        Workflow, RunRequest, Provider,
+        Workflow, RunRequest, Provider, resolve_cli_path,
         stream as runner_stream, extract_json_payload,
     )
 
@@ -1143,8 +1145,8 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
     if provider is None:
         raise HTTPException(503, "No AI provider available. Configure Claude/Codex CLI or an API key in Settings.")
     cli_path = (
-        settings.claude_cli_path if provider == Provider.CLAUDE_CLI else
-        settings.codex_cli_path if provider == Provider.CODEX_CLI else None
+        resolve_cli_path("claude", settings.claude_cli_path) if provider == Provider.CLAUDE_CLI else
+        resolve_cli_path("codex", settings.codex_cli_path) if provider == Provider.CODEX_CLI else None
     )
 
     user = db.get(models.User, 1)
@@ -1373,15 +1375,15 @@ async def _run_workflow_json(db: Session, workflow, params: dict,
                              max_turns: int = 6, timeout_s: int = 240) -> dict:
     """Run a Quill workflow to completion and return the parsed JSON payload."""
     from .quill import _settings, _select_provider_for
-    from ai.runner import RunRequest, Provider, stream as runner_stream, extract_json_payload
+    from ai.runner import RunRequest, Provider, resolve_cli_path, stream as runner_stream, extract_json_payload
 
     settings = _settings(db)
     provider = _select_provider_for(settings)
     if provider is None:
         raise HTTPException(503, "No AI provider available. Configure Claude/Codex CLI or an API key in Settings.")
     cli_path = (
-        settings.claude_cli_path if provider == Provider.CLAUDE_CLI else
-        settings.codex_cli_path if provider == Provider.CODEX_CLI else None
+        resolve_cli_path("claude", settings.claude_cli_path) if provider == Provider.CLAUDE_CLI else
+        resolve_cli_path("codex", settings.codex_cli_path) if provider == Provider.CODEX_CLI else None
     )
     request = RunRequest(workflow=workflow, params=params, max_turns=max_turns, timeout_s=timeout_s)
     parts: list[str] = []
