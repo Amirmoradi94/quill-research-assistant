@@ -1056,20 +1056,20 @@ function CandidatePreview({ p, onAccept, onDismiss, onResearch, researching }: {
           <Field label="Source" value={p.source || '—'} />
         </div>
 
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <button onClick={onAccept}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-[12px] font-semibold"
+            className="inline-flex min-w-[116px] items-center justify-center gap-1.5 px-3 py-2 rounded-md text-[12px] font-semibold"
             style={{ background: 'var(--color-ink)', color: 'white' }}>
             <Check size={13} /> Add to pipeline
           </button>
           <button onClick={onResearch} disabled={researching}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
+            className="inline-flex min-w-[96px] items-center justify-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
             style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)', color: 'var(--color-ink-soft)' }}>
             {researching ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
             Research
           </button>
           <button onClick={onDismiss}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium"
+            className="inline-flex min-w-[96px] items-center justify-center gap-1.5 px-3 py-2 rounded-md border text-[12px] font-medium"
             style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)', color: 'var(--color-rose-700)' }}>
             <X size={13} /> Dismiss
           </button>
@@ -1079,7 +1079,7 @@ function CandidatePreview({ p, onAccept, onDismiss, onResearch, researching }: {
                 e.preventDefault()
                 openExternalUrl(p.profile_url)
               }}
-              className="ml-auto inline-flex items-center gap-1 text-[12px]"
+              className="inline-flex min-w-0 items-center gap-1 text-[12px]"
               style={{ color: 'var(--color-brand-600)' }}>
               Faculty page <ExternalLink size={11} />
             </a>
@@ -1149,6 +1149,7 @@ export function Discover() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [activeWorkflow, setActiveWorkflow] = useState<'discover' | 'research' | null>(null)
   const [discoveryBatch, setDiscoveryBatch] = useState<DiscoveryBatchProgress | null>(null)
+  const [acceptingAll, setAcceptingAll] = useState(false)
   const discoveryStopRef = useRef(false)
   const quill = useQuillRun()
 
@@ -1284,10 +1285,16 @@ export function Discover() {
   }
 
   const acceptAll = async () => {
-    await Promise.all(filtered.map((p) =>
-      api.patchProfessor(p.id, { status: 'drafting', is_suggested: false })
-    ))
-    reload()
+    if (suggested.length === 0 || acceptingAll) return
+    setAcceptingAll(true)
+    try {
+      await Promise.all(suggested.map((p) =>
+        api.patchProfessor(p.id, { status: 'drafting', is_suggested: false })
+      ))
+      reload()
+    } finally {
+      setAcceptingAll(false)
+    }
   }
 
   const researchSelected = async () => {
@@ -1330,12 +1337,13 @@ export function Discover() {
                 : <Sparkles size={13} />}
               Run discovery
             </button>
-            {filtered.length > 0 && (
-              <button onClick={acceptAll}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] border"
+            {suggested.length > 0 && (
+              <button onClick={acceptAll} disabled={acceptingAll}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] border disabled:opacity-60"
                 style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)',
                   color: 'var(--color-ink-soft)' }}>
-                <Check size={13} /> Accept visible
+                {acceptingAll ? <Loader size={13} className="animate-spin" /> : <Check size={13} />}
+                Add all to pipeline
               </button>
             )}
             <button onClick={() => setSettingsOpen(!settingsOpen)}
@@ -1374,7 +1382,7 @@ export function Discover() {
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-3 items-start">
           <section className="rounded-md border overflow-hidden"
             style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-            <div className="px-3 py-2 border-b flex items-center justify-between"
+            <div className="px-3 py-2 border-b flex items-center justify-between gap-2"
               style={{ borderColor: 'var(--color-line)', background: 'color-mix(in srgb, var(--color-paper) 70%, var(--color-white))' }}>
               <div>
                 <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Ranked queue</h2>
@@ -1382,14 +1390,24 @@ export function Discover() {
                   {filtered.length ? `${filtered.length} candidates ready for review` : 'No visible candidates'}
                 </div>
               </div>
-              <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold disabled:opacity-60"
-                style={{ background: 'var(--color-ink)', color: 'white' }}>
-                {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
-                  ? <Loader size={12} className="animate-spin" />
-                  : <Sparkles size={12} />}
-                Run
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {suggested.length > 0 && (
+                  <button onClick={acceptAll} disabled={acceptingAll}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-medium disabled:opacity-60"
+                    style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)', color: 'var(--color-ink-soft)' }}>
+                    {acceptingAll ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
+                    Add all
+                  </button>
+                )}
+                <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold disabled:opacity-60"
+                  style={{ background: 'var(--color-ink)', color: 'white' }}>
+                  {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
+                    ? <Loader size={12} className="animate-spin" />
+                    : <Sparkles size={12} />}
+                  Run
+                </button>
+              </div>
             </div>
 
             {filtered.length === 0 && (
