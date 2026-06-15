@@ -34,22 +34,30 @@ export function Drafts() {
   const [gmailConnected, setGmailConnected] = useState(false)
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [generatingDrafts, setGeneratingDrafts] = useState(false)
   const [draftBatchSize, setDraftBatchSize] = useState(5)
   const [draftInstructions, setDraftInstructions] = useState('')
   const [redraftFor, setRedraftFor] = useState<Draft | null>(null)
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null)
+  const reloadSeqRef = useRef(0)
   const confirm = useConfirm()
 
   const reload = async () => {
+    const requestId = reloadSeqRef.current + 1
+    reloadSeqRef.current = requestId
+    setRefreshing(true)
+    const settingsPromise = api.settings().catch(() => null)
     try {
       const rows = await api.drafts()
+      if (requestId !== reloadSeqRef.current) return
       setDrafts(rows)
       setErr(null)
 
       const activeDraftProfessorIds = new Set(rows.filter((d) => !d.sent_at).map((d) => d.professor_id))
       try {
         const professors = await api.professors({ status: 'drafting' })
+        if (requestId !== reloadSeqRef.current) return
         setDraftTargets(professors.filter((p) => (
           !p.is_suggested
           && !p.dismissed_at
@@ -60,9 +68,15 @@ export function Drafts() {
         setErr(`Drafts loaded, but the draft creation queue could not refresh. ${errorMessage(e)}`)
       }
     } catch (e) {
+      if (requestId !== reloadSeqRef.current) return
       setErr(errorMessage(e))
+    } finally {
+      const settings = await settingsPromise
+      if (requestId === reloadSeqRef.current) {
+        if (settings) setGmailConnected(!!settings.gmail_connected)
+        setRefreshing(false)
+      }
     }
-    api.settings().then((s) => setGmailConnected(!!s.gmail_connected)).catch(() => {})
   }
 
   useEffect(() => {
@@ -286,11 +300,13 @@ export function Drafts() {
               </Link>
             )}
             <button
-              onClick={reload}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-[12px] font-medium"
+              onClick={() => { void reload() }}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-[12px] font-medium disabled:opacity-60"
               style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
             >
-              <RefreshCw size={13} /> Refresh
+              <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Refreshing' : 'Refresh'}
             </button>
           </div>
         </div>
