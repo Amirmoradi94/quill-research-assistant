@@ -331,10 +331,10 @@ export function Setup() {
               <h2 className="text-[17px] font-semibold">Setup status</h2>
             </div>
             <div className="mt-4 grid gap-2">
-              <StatusLine label="Local backend" done={!!state.desktop} />
-              <StatusLine label="AI provider" done={hasProvider} />
-              <StatusLine label="CV uploaded" done={!!defaultCv} />
-              <StatusLine label="Profile name" done={hasProfileName} />
+              <StatusLine label="Local backend" status={state.desktop ? 'ready' : loading || backendStarting ? 'checking' : 'needs_attention'} />
+              <StatusLine label="AI provider" status={hasProvider ? 'ready' : loading ? 'checking' : 'needs_attention'} />
+              <StatusLine label="CV uploaded" status={defaultCv ? 'ready' : loading ? 'checking' : 'needs_attention'} />
+              <StatusLine label="Profile name" status={hasProfileName ? 'ready' : loading ? 'checking' : 'needs_attention'} />
             </div>
             <button
               onClick={finish}
@@ -488,11 +488,19 @@ function ProviderChoice({ name, description, available, selected, busy, onClick,
   )
 }
 
-function StatusLine({ label, done }: { label: string; done: boolean }) {
+function StatusLine({ label, status }: { label: string; status: 'ready' | 'checking' | 'needs_attention' }) {
+  const done = status === 'ready'
+  const checking = status === 'checking'
   return (
     <div className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-[13px]" style={{ background: 'var(--color-paper)' }}>
       <span>{label}</span>
-      {done ? <CheckCircle2 size={15} style={{ color: 'var(--color-green-700)' }} /> : <AlertCircle size={15} style={{ color: 'var(--color-amber-700)' }} />}
+      {done ? (
+        <CheckCircle2 size={15} style={{ color: 'var(--color-green-700)' }} />
+      ) : checking ? (
+        <Loader2 size={15} className="animate-spin" style={{ color: 'var(--color-muted)' }} />
+      ) : (
+        <AlertCircle size={15} style={{ color: 'var(--color-amber-700)' }} />
+      )}
     </div>
   )
 }

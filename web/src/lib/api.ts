@@ -497,23 +497,47 @@ export type BatchParams = {
   universities?: string[]
 }
 
+const STARTUP_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000, 10000]
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function isIdempotentRequest(init?: RequestInit): boolean {
+  const method = init?.method?.toUpperCase() ?? 'GET'
+  return method === 'GET' || method === 'HEAD'
+}
+
+class ApiHttpError extends Error {}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let r: Response
-  try {
-    r = await fetch(apiUrl(path), {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
-    })
-  } catch (e) {
-    const raw = e instanceof Error ? e.message : String(e)
-    throw new Error(
-      `Local backend is not reachable while loading ${path}. Wait a few seconds, then click Refresh.${raw ? ` (${raw})` : ''}`,
-    )
+  const retryDelays = isIdempotentRequest(init) ? STARTUP_RETRY_DELAYS_MS : []
+  let lastError = ''
+
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    try {
+      r = await fetch(apiUrl(path), {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+      })
+      if (!r.ok) {
+        throw new ApiHttpError(`${r.status} ${r.statusText} · ${path}`)
+      }
+      return r.json() as Promise<T>
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e)
+      if (e instanceof ApiHttpError) {
+        throw e
+      }
+      if (attempt >= retryDelays.length) break
+      await sleep(retryDelays[attempt])
+    }
   }
-  if (!r.ok) {
-    throw new Error(`${r.status} ${r.statusText} · ${path}`)
-  }
-  return r.json() as Promise<T>
+
+  throw new Error(
+    `Local backend is not reachable while loading ${path}. Quill waited for the packaged backend to start; click Recheck, or close and reopen the app if this keeps happening.${lastError ? ` (${lastError})` : ''}`,
+  )
 }
 
 export const api = {
