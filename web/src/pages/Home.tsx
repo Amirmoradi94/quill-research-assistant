@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type Com
 import { Link } from 'react-router-dom'
 import {
   Activity,
+  AlertCircle,
   ArrowRight,
   CalendarDays,
   CheckCircle2,
   Clock,
   FileText,
+  Loader2,
   Mail,
   MessageCircle,
   SendHorizontal,
@@ -71,6 +73,7 @@ export function Home() {
   const [grants, setGrants] = useState<Grant[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoadedData, setHasLoadedData] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -102,20 +105,24 @@ export function Home() {
       grantsResult,
     ] = results
 
-    setStats(fulfilled(statsResult))
-    setActivity(fulfilled(activityResult) ?? [])
-    setProfile(fulfilled(profileResult))
-    setUser(fulfilled(userResult))
-    setProfessors(fulfilled(professorsResult) ?? [])
-    setDrafts(fulfilled(draftsResult) ?? [])
-    setSent(fulfilled(sentResult) ?? [])
-    setDocuments(fulfilled(documentsResult) ?? [])
-    setEvents(fulfilled(eventsResult) ?? [])
-    setInterviews(fulfilled(interviewsResult) ?? [])
-    setGrants(fulfilled(grantsResult) ?? [])
-    setErrors(results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => String(r.reason)))
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => String(r.reason))
+    const loadedAny = results.some((result) => result.status === 'fulfilled')
+
+    if (statsResult.status === 'fulfilled') setStats(statsResult.value)
+    if (activityResult.status === 'fulfilled') setActivity(activityResult.value)
+    if (profileResult.status === 'fulfilled') setProfile(profileResult.value)
+    if (userResult.status === 'fulfilled') setUser(userResult.value)
+    if (professorsResult.status === 'fulfilled') setProfessors(professorsResult.value)
+    if (draftsResult.status === 'fulfilled') setDrafts(draftsResult.value)
+    if (sentResult.status === 'fulfilled') setSent(sentResult.value)
+    if (documentsResult.status === 'fulfilled') setDocuments(documentsResult.value)
+    if (eventsResult.status === 'fulfilled') setEvents(eventsResult.value)
+    if (interviewsResult.status === 'fulfilled') setInterviews(interviewsResult.value)
+    if (grantsResult.status === 'fulfilled') setGrants(grantsResult.value)
+    if (loadedAny) setHasLoadedData(true)
+    setErrors(failures)
     setLoading(false)
-    return results.some((result) => result.status === 'rejected')
+    return failures.length > 0
   }, [])
 
   useEffect(() => {
@@ -145,8 +152,22 @@ export function Home() {
   const interviewCount = stats?.interview_count ?? interviews.filter((prep) => prep.status !== 'archived').length
   const unreadReplies = sent.reduce((sum, row) => sum + row.replies.filter((reply) => !reply.read_at && !reply.dismissed_at).length, 0)
   const followupsDue = stats?.pending_followups ?? sent.filter((row) => (row.days_since_sent ?? 0) >= 14 && row.reply_count === 0).length
+  const initialSync = loading && !hasLoadedData
+  const backendUnavailable = !loading && errors.length > 0 && !hasLoadedData
+  const partialData = errors.length > 0 && hasLoadedData
+  const dataUnavailable = initialSync || backendUnavailable
+  const statusLabel = initialSync ? 'Starting backend' : backendUnavailable ? 'Backend offline' : partialData ? 'Partial data' : loading ? 'Syncing' : 'Live'
+  const statusTone = backendUnavailable ? 'rose' : initialSync || partialData || loading ? 'amber' : 'green'
+  const statusMessage = initialSync
+    ? 'Quill is connecting to the local backend and loading your application data. Counts will appear once the database responds.'
+    : backendUnavailable
+      ? 'The local backend is still starting or not reachable. Quill is retrying automatically; use Setup if this does not clear.'
+      : partialData
+        ? 'Some data sources did not respond. Showing the data that loaded successfully while Quill keeps retrying.'
+        : ''
 
   const statusRows = useMemo(() => {
+    if (dataUnavailable) return []
     const counts = stats?.by_status ?? professors.reduce<Record<string, number>>((acc, prof) => {
       const key = prof.status || 'new'
       acc[key] = (acc[key] || 0) + 1
@@ -154,7 +175,7 @@ export function Home() {
     }, {})
     const entries = Object.entries(counts).sort(([, a], [, b]) => b - a)
     return entries.length ? entries.slice(0, 5) : [['No targets loaded', 0] as [string, number]]
-  }, [professors, stats])
+  }, [dataUnavailable, professors, stats])
 
   const upcomingTasks = useMemo(() => {
     const tasks: Array<{ id: string; title: string; detail: string; icon: IconComponent; to: string }> = []
@@ -214,15 +235,36 @@ export function Home() {
               Application pipeline
             </h1>
             <p className="mt-1 max-w-3xl text-[14px] leading-6" style={{ color: 'var(--color-muted)' }}>
-              {sentCount} professors contacted, {replyCount} replies, {interviewCount} interview{interviewCount === 1 ? '' : 's'}, and {drafts.length} drafts still in queue.
+              {dataUnavailable
+                ? 'Connecting to the local backend and loading your application pipeline.'
+                : `${sentCount} professors contacted, ${replyCount} replies, ${interviewCount} interview${interviewCount === 1 ? '' : 's'}, and ${drafts.length} drafts still in queue.`}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <StatusChip label={loading ? 'Syncing' : errors.length ? 'Partial data' : 'Live'} tone={errors.length ? 'amber' : 'green'} />
+            <StatusChip label={statusLabel} tone={statusTone} busy={loading || initialSync} />
             <LinkButton to="/drafts" icon={Mail}>Review drafts</LinkButton>
             <LinkButton to="/discover" icon={Sparkles}>Discover</LinkButton>
           </div>
         </div>
+
+        {statusMessage && (
+          <section
+            className="mb-3 rounded-md border px-3 py-3"
+            style={{
+              background: backendUnavailable ? 'var(--color-rose-50)' : 'var(--color-amber-50)',
+              borderColor: backendUnavailable ? 'var(--color-rose-200)' : 'var(--color-amber-200)',
+              color: backendUnavailable ? 'var(--color-rose-700)' : 'var(--color-amber-700)',
+            }}
+          >
+            <div className="flex items-start gap-2">
+              {backendUnavailable ? <AlertCircle size={16} className="mt-0.5 shrink-0" /> : <Loader2 size={16} className="mt-0.5 shrink-0 animate-spin" />}
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold">{statusLabel}</div>
+                <div className="mt-0.5 text-[12px] leading-5">{statusMessage}</div>
+              </div>
+            </div>
+          </section>
+        )}
 
         {attentionItems.length > 0 && (
           <section className="mb-3 rounded-md border px-3 py-3"
@@ -257,27 +299,31 @@ export function Home() {
         >
           <KpiCard
             title="Total Targets"
-            value={totalApplications}
-            detail={`${sentCount} sent · ${drafts.length} drafting`}
+            value={dataUnavailable ? null : totalApplications}
+            detail={dataUnavailable ? 'Loading application data' : `${sentCount} sent · ${drafts.length} drafting`}
             trend="up"
+            loading={dataUnavailable}
           />
           <KpiCard
             title="Sent Outreach"
-            value={sentCount}
-            detail={`${Math.round(responseRate)}% response rate`}
+            value={dataUnavailable ? null : sentCount}
+            detail={dataUnavailable ? 'Waiting for backend response' : `${Math.round(responseRate)}% response rate`}
             trend="flat"
+            loading={dataUnavailable}
           />
           <KpiCard
             title="Replies Received"
-            value={replyCount}
-            detail={`${unreadReplies} unread right now`}
+            value={dataUnavailable ? null : replyCount}
+            detail={dataUnavailable ? 'Inbox summary not loaded yet' : `${unreadReplies} unread right now`}
             trend="flat"
+            loading={dataUnavailable}
           />
           <KpiCard
             title="Follow-ups Due"
-            value={followupsDue}
-            detail={events.length ? `Next interview ${shortDate(events[0]?.date)}` : 'No interview date scheduled'}
+            value={dataUnavailable ? null : followupsDue}
+            detail={dataUnavailable ? 'Calendar data not loaded yet' : events.length ? `Next interview ${shortDate(events[0]?.date)}` : 'No interview date scheduled'}
             trend="step"
+            loading={dataUnavailable}
           />
         </section>
 
@@ -291,7 +337,9 @@ export function Home() {
                 <span>Share</span>
                 <span className="hidden sm:block">Progress</span>
               </div>
-              {statusRows.map(([status, count]) => {
+              {dataUnavailable ? (
+                <LoadingLine text={backendUnavailable ? 'Waiting for the local backend to come online.' : 'Connecting to the local backend.'} />
+              ) : statusRows.map(([status, count]) => {
                 const share = totalApplications > 0 ? Math.round((count / totalApplications) * 100) : 0
                 return (
                   <div key={status} className="w-full min-w-0 grid grid-cols-[minmax(0,1fr)_44px_44px] sm:grid-cols-[minmax(0,1fr)_46px_46px_64px] gap-2 items-center px-2 py-3 text-[13px] border-b last:border-b-0" style={{ borderColor: 'var(--color-line)' }}>
@@ -311,7 +359,9 @@ export function Home() {
             <Panel>
               <SectionTitle icon={Target} title="Action Queue" action={<LinkText to="/sent">Review</LinkText>} />
               <div className="px-3 py-3 grid gap-2">
-                {upcomingTasks.length > 0 ? upcomingTasks.slice(0, 4).map((task) => {
+                {dataUnavailable ? (
+                  <LoadingLine text="Action queue will appear after the backend responds." compact />
+                ) : upcomingTasks.length > 0 ? upcomingTasks.slice(0, 4).map((task) => {
                   const Icon = task.icon
                   return (
                     <Link key={task.id} to={task.to}
@@ -341,7 +391,7 @@ export function Home() {
                     <span className="line-clamp-2 leading-5" style={{ color: 'var(--color-ink)' }}>{row.action}{row.detail ? ` · ${row.detail}` : ''}</span>
                   </div>
                 ))}
-                {activity.length === 0 && <EmptyLine text="No recent activity yet." />}
+                {dataUnavailable ? <LoadingLine text="Recent activity is loading." /> : activity.length === 0 && <EmptyLine text="No recent activity yet." />}
               </div>
             </Panel>
           </div>
@@ -352,34 +402,40 @@ export function Home() {
           style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))' }}
         >
           <SmallPanel icon={Users} title="Priority Matches" to="/professors">
-            {professors.slice(0, 4).length > 0 ? professors.slice(0, 4).map((prof) => (
+            {dataUnavailable ? <LoadingLine text="Professor targets are loading." compact /> : professors.slice(0, 4).length > 0 ? professors.slice(0, 4).map((prof) => (
               <ListLine key={prof.id} title={prof.name} meta={[prof.university, formatStatusLabel(prof.status || 'new')].filter(Boolean).join(' · ')} />
             )) : <EmptyLine text="No targets loaded." compact />}
           </SmallPanel>
 
           <SmallPanel icon={CalendarDays} title="Upcoming Dates" to="/calendar">
-            {upcomingEvents.length > 0 ? upcomingEvents.map((event) => (
+            {dataUnavailable ? <LoadingLine text="Calendar is loading." compact /> : upcomingEvents.length > 0 ? upcomingEvents.map((event) => (
               <ListLine key={event.id} title={event.title} meta={shortDate(event.date)} />
             )) : <EmptyLine text="No upcoming dates." compact />}
           </SmallPanel>
 
           <SmallPanel icon={FileText} title="Documents" to="/documents">
-            {recentDocuments.length > 0 ? recentDocuments.map((doc) => (
+            {dataUnavailable ? <LoadingLine text="Documents are loading." compact /> : recentDocuments.length > 0 ? recentDocuments.map((doc) => (
               <ListLine key={doc.id} title={doc.title || doc.filename} meta={`${formatStatusLabel(doc.kind)}${doc.is_default ? ' · Default' : ''}`} />
             )) : <EmptyLine text="No documents loaded." compact />}
           </SmallPanel>
 
           <SmallPanel icon={CheckCircle2} title="Profile Signals" to="/profile">
-            <ListLine title={user?.name || profile?.name || 'Amir Moradi'} meta={user?.headline || profile?.current_role || 'Research candidate'} />
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {researchTags.length > 0 ? researchTags.slice(0, 5).map((tag) => (
-                <span key={tag} className="px-2 py-0.5 rounded-full text-[11px] font-medium" style={{ background: 'var(--color-ink)', color: 'white' }}>
-                  {formatCategory(tag)}
-                </span>
-              )) : (
-                <span className="text-[12px]" style={{ color: 'var(--color-muted)' }}>Add profile tags.</span>
-              )}
-            </div>
+            {dataUnavailable ? (
+              <LoadingLine text="Profile signals are loading." compact />
+            ) : (
+              <>
+                <ListLine title={user?.name || profile?.name || 'Amir Moradi'} meta={user?.headline || profile?.current_role || 'Research candidate'} />
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {researchTags.length > 0 ? researchTags.slice(0, 5).map((tag) => (
+                    <span key={tag} className="px-2 py-0.5 rounded-full text-[11px] font-medium" style={{ background: 'var(--color-ink)', color: 'white' }}>
+                      {formatCategory(tag)}
+                    </span>
+                  )) : (
+                    <span className="text-[12px]" style={{ color: 'var(--color-muted)' }}>Add profile tags.</span>
+                  )}
+                </div>
+              </>
+            )}
           </SmallPanel>
         </section>
       </div>
@@ -410,14 +466,22 @@ function SectionTitle({ icon: Icon, title, action }: { icon: IconComponent; titl
   )
 }
 
-function KpiCard({ title, value, detail, trend }: { title: string; value: ReactNode; detail: string; trend: 'up' | 'flat' | 'step' }) {
+function KpiCard({ title, value, detail, trend, loading = false }: {
+  title: string
+  value: ReactNode
+  detail: string
+  trend: 'up' | 'flat' | 'step'
+  loading?: boolean
+}) {
   return (
     <Panel>
       <div className="p-4 min-h-[112px]">
         <div className="text-[13px] font-semibold" style={{ color: 'var(--color-ink)' }}>{title}</div>
         <div className="flex items-end justify-between gap-3 mt-2">
-          <div className="text-[36px] font-bold leading-none" style={{ color: 'var(--color-ink)' }}>{value}</div>
-          <SparkLine trend={trend} />
+          <div className="text-[36px] font-bold leading-none" style={{ color: 'var(--color-ink)' }}>
+            {loading ? <LoadingDots /> : value}
+          </div>
+          {loading ? <div className="h-[34px] w-[70px] rounded-sm opacity-70" style={{ background: 'var(--color-paper-2)' }} /> : <SparkLine trend={trend} />}
         </div>
         <div className="mt-2 text-[12px]" style={{ color: 'var(--color-muted)' }}>{detail}</div>
       </div>
@@ -464,6 +528,29 @@ function EmptyLine({ text, compact = false }: { text: string; compact?: boolean 
   return <div className={`${compact ? 'py-1' : 'px-2 py-3'} text-[12px]`} style={{ color: 'var(--color-muted)' }}>{text}</div>
 }
 
+function LoadingLine({ text, compact = false }: { text: string; compact?: boolean }) {
+  return (
+    <div className={`${compact ? 'py-1' : 'px-2 py-3'} flex items-center gap-2 text-[12px]`} style={{ color: 'var(--color-muted)' }}>
+      <Loader2 size={13} className="animate-spin" />
+      <span>{text}</span>
+    </div>
+  )
+}
+
+function LoadingDots() {
+  return (
+    <span className="inline-flex h-9 items-end gap-1 pb-1" aria-label="Loading">
+      {[0, 1, 2].map((item) => (
+        <span
+          key={item}
+          className="h-2 w-2 animate-pulse rounded-full"
+          style={{ background: 'var(--color-muted)', animationDelay: `${item * 120}ms` }}
+        />
+      ))}
+    </span>
+  )
+}
+
 function LinkText({ to, children }: { to: string; children: ReactNode }) {
   return (
     <Link to={to} className={`inline-flex items-center gap-1 font-semibold hover:underline ${HOME_ACTION_TRANSITION}`} style={{ color: 'var(--color-brand-700)' }}>
@@ -486,12 +573,13 @@ function LinkButton({ to, icon: Icon, children }: { to: string; icon: IconCompon
   )
 }
 
-function StatusChip({ label, tone }: { label: string; tone: 'green' | 'amber' }) {
-  const color = tone === 'green' ? 'var(--color-green-700)' : 'var(--color-amber-700)'
-  const background = tone === 'green' ? 'var(--color-green-50)' : 'var(--color-amber-50)'
+function StatusChip({ label, tone, busy = false }: { label: string; tone: 'green' | 'amber' | 'rose'; busy?: boolean }) {
+  const color = tone === 'green' ? 'var(--color-green-700)' : tone === 'rose' ? 'var(--color-rose-700)' : 'var(--color-amber-700)'
+  const background = tone === 'green' ? 'var(--color-green-50)' : tone === 'rose' ? 'var(--color-rose-50)' : 'var(--color-amber-50)'
+  const Icon = tone === 'rose' ? AlertCircle : busy ? Loader2 : TrendingUp
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[13px] font-medium" style={{ background, borderColor: 'var(--color-line)', color }}>
-      <TrendingUp size={12} />
+      <Icon size={12} className={busy ? 'animate-spin' : ''} />
       {label}
     </span>
   )

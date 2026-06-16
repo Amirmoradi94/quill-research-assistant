@@ -15,6 +15,6 @@ cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 export POSTDOC_DESKTOP=1
 export POSTDOC_DISABLE_REPLY_POLLER="${POSTDOC_DISABLE_REPLY_POLLER:-1}"
-export POSTDOC_CORS_ORIGINS="${POSTDOC_CORS_ORIGINS:-http://localhost:1420,http://127.0.0.1:1420,http://tauri.localhost}"
+export POSTDOC_CORS_ORIGINS="${POSTDOC_CORS_ORIGINS:-http://localhost:1420,http://127.0.0.1:1420,http://tauri.localhost,https://tauri.localhost,tauri://localhost,null}"
 
 exec "$VENV/bin/uvicorn" app.main:app --host 127.0.0.1 --port "${PORT:-8000}" --log-level info

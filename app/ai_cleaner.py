@@ -22,8 +22,10 @@ from typing import Optional
 
 import httpx
 
-from . import models
+from ai.cli import cli_child_env
 from ai.runner import resolve_cli_path
+
+from . import models
 
 
 SYSTEM_PROMPT = (
@@ -107,6 +109,7 @@ async def _run_subprocess(argv: list[str]) -> Optional[str]:
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=cli_child_env(),
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)

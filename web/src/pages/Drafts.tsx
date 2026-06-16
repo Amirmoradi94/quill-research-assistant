@@ -23,6 +23,26 @@ import { RedraftModal } from '@/components/RedraftModal'
 
 type IconComponent = ComponentType<{ size?: number; className?: string; style?: CSSProperties }>
 
+const DRAFT_INSTRUCTIONS_STORAGE_KEY = 'quill.draftInstructions'
+
+const DRAFT_INSTRUCTION_TEMPLATES = [
+  {
+    label: 'Concise postdoc',
+    text:
+      'Use a concise postdoc inquiry format: 180-220 words, four short paragraphs, professional tone, one professor paper hook, one paragraph on my strongest publications, one concrete research bridge, and a simple request to discuss opportunities.',
+  },
+  {
+    label: 'Warm but direct',
+    text:
+      'Write in a warm but direct academic tone. Avoid sounding generic. Use one specific detail from the professor research, keep the opening personal, and make the fit between my work and their lab clear without overclaiming.',
+  },
+  {
+    label: 'Application style',
+    text:
+      'Write like a formal application email. Follow any contact instructions from the professor page exactly. Mention attached CV. Keep the email structured, factual, and easy to scan.',
+  },
+]
+
 export function Drafts() {
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [draftTargets, setDraftTargets] = useState<Professor[]>([])
@@ -80,10 +100,26 @@ export function Drafts() {
   }
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(DRAFT_INSTRUCTIONS_STORAGE_KEY)
+      if (saved) setDraftInstructions(saved)
+    } catch {
+      // Local storage is optional; drafting still works without persistence.
+    }
     reload()
     window.addEventListener('quill:data-changed', reload)
     return () => window.removeEventListener('quill:data-changed', reload)
   }, [])
+
+  useEffect(() => {
+    try {
+      const value = draftInstructions.trim()
+      if (value) window.localStorage.setItem(DRAFT_INSTRUCTIONS_STORAGE_KEY, draftInstructions)
+      else window.localStorage.removeItem(DRAFT_INSTRUCTIONS_STORAGE_KEY)
+    } catch {
+      // Ignore persistence failures; the textarea state is still sent with the run.
+    }
+  }, [draftInstructions])
 
   const activeDrafts = useMemo(() => drafts.filter((d) => !d.sent_at), [drafts])
   const categories = useMemo(() => {
@@ -134,10 +170,13 @@ export function Drafts() {
   const createDraftBatch = async () => {
     const batch = draftTargets.slice(0, draftBatchSize)
     if (batch.length === 0) return
+    const instructionText = draftInstructions.trim()
     const ok = await confirm({
       title: `Create ${batch.length} draft${batch.length === 1 ? '' : 's'} with Quill?`,
       detail: `${draftTargets.length} accepted professor${draftTargets.length === 1 ? '' : 's'} need drafts`,
-      message: 'Quill will start background AI runs for the next batch. Drafts appear here as each run finishes.',
+      message: instructionText
+        ? 'Quill will start background AI runs and apply your email instructions/template to each draft.'
+        : 'Quill will start background AI runs for the next batch. Drafts appear here as each run finishes.',
       variant: 'primary',
       confirmLabel: 'Create drafts',
     })
@@ -147,7 +186,7 @@ export function Drafts() {
       const result = await api.generateDrafts({
         professor_ids: batch.map((p) => p.id),
         limit: batch.length,
-        user_instructions: draftInstructions.trim() || undefined,
+        user_instructions: instructionText || undefined,
       })
       setToastTimed({
         ok: true,
@@ -333,6 +372,7 @@ export function Drafts() {
           instructions={draftInstructions}
           onBatchSizeChange={setDraftBatchSize}
           onInstructionsChange={setDraftInstructions}
+          onApplyTemplate={(text) => setDraftInstructions(text)}
           onCreate={createDraftBatch}
         />
 
@@ -393,6 +433,7 @@ function DraftGenerationPanel({
   instructions,
   onBatchSizeChange,
   onInstructionsChange,
+  onApplyTemplate,
   onCreate,
 }: {
   targets: Professor[]
@@ -401,9 +442,11 @@ function DraftGenerationPanel({
   instructions: string
   onBatchSizeChange: (n: number) => void
   onInstructionsChange: (value: string) => void
+  onApplyTemplate: (value: string) => void
   onCreate: () => void
 }) {
   const nextCount = Math.min(batchSize, targets.length)
+  const hasInstructions = instructions.trim().length > 0
   return (
     <section className="rounded-md border p-3 mb-3"
       style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
@@ -417,7 +460,7 @@ function DraftGenerationPanel({
           </div>
           <p className="text-[12px] mt-1 leading-relaxed" style={{ color: 'var(--color-muted)' }}>
             {targets.length > 0
-              ? `${targets.length} accepted professor${targets.length === 1 ? '' : 's'} do not have email drafts yet. Choose a batch size and instructions before starting.`
+              ? `${targets.length} accepted professor${targets.length === 1 ? '' : 's'} do not have email drafts yet.`
               : 'All accepted professors currently have drafts, or no accepted professors are ready for drafting.'}
           </p>
         </div>
@@ -449,20 +492,57 @@ function DraftGenerationPanel({
           </button>
         </div>
       </div>
-      <textarea
-        value={instructions}
-        onChange={(e) => onInstructionsChange(e.target.value)}
-        disabled={generating}
-        rows={2}
-        className="mt-3 w-full resize-y rounded-md border px-3 py-2 text-[13px] outline-none disabled:opacity-60"
-        style={{
-          background: 'var(--color-paper)',
-          borderColor: 'var(--color-line)',
-          color: 'var(--color-ink)',
-          lineHeight: 1.45,
-        }}
-        placeholder="Optional instructions for this batch, e.g. make it concise, emphasize autonomous driving, mention my CV attachment, avoid saying I am available immediately..."
-      />
+      <div className="mt-3 rounded-md border p-3"
+        style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
+        <div className="flex items-center gap-2 mb-2">
+          <label className="text-[11px] uppercase tracking-[0.08em] font-medium" style={{ color: 'var(--color-muted)' }}>
+            Email instructions / template
+          </label>
+          <span className="ml-auto text-[11px] font-mono" style={{ color: 'var(--color-muted)' }}>
+            {hasInstructions ? `${wordCount(instructions)} words` : 'optional'}
+          </span>
+        </div>
+        <textarea
+          value={instructions}
+          onChange={(e) => onInstructionsChange(e.target.value)}
+          disabled={generating}
+          rows={5}
+          className="w-full resize-y rounded-md border px-3 py-2 text-[13px] outline-none disabled:opacity-60"
+          style={{
+            background: 'var(--color-white)',
+            borderColor: 'var(--color-line)',
+            color: 'var(--color-ink)',
+            lineHeight: 1.45,
+            minHeight: 120,
+          }}
+          placeholder="Paste rules or a full email template. Example: keep under 200 words, mention one recent paper, emphasize my autonomous driving research, use a formal postdoc inquiry structure."
+        />
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          {DRAFT_INSTRUCTION_TEMPLATES.map((template) => (
+            <button
+              key={template.label}
+              type="button"
+              onClick={() => onApplyTemplate(template.text)}
+              disabled={generating}
+              className="px-2.5 py-1.5 rounded-md border text-[12px] font-medium disabled:opacity-50"
+              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
+            >
+              {template.label}
+            </button>
+          ))}
+          {hasInstructions && (
+            <button
+              type="button"
+              onClick={() => onInstructionsChange('')}
+              disabled={generating}
+              className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[12px] font-medium disabled:opacity-50"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              <X size={12} /> Clear
+            </button>
+          )}
+        </div>
+      </div>
     </section>
   )
 }

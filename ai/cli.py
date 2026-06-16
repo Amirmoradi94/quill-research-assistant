@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 
@@ -24,6 +25,49 @@ class SpawnResult:
 # Bind the asyncio API once at module load — keeps the call site obvious and
 # makes the security boundary easy to audit (single, named entry point).
 _create_proc = asyncio.create_subprocess_exec  # NOTE: argv form, never shell.
+
+
+def cli_child_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a subprocess env that works from a macOS GUI-launched app.
+
+    Tauri/Finder-launched apps often get a reduced PATH. Provider CLIs such as
+    Codex may be small shims with a `/usr/bin/env node` shebang, so finding the
+    CLI itself is not enough; the child process must also be able to find Node.
+    """
+    child_env = {**os.environ, **(extra_env or {})}
+
+    home = Path.home()
+    path_entries = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+        str(home / ".local" / "bin"),
+        str(home / ".npm-global" / "bin"),
+        str(home / ".volta" / "bin"),
+        str(home / ".codex" / "bin"),
+        str(home / ".claude" / "local"),
+        str(home / ".claude" / "bin"),
+    ]
+
+    existing_path = child_env.get("PATH") or ""
+    path_entries.extend(p for p in existing_path.split(os.pathsep) if p)
+
+    seen: set[str] = set()
+    child_env["PATH"] = os.pathsep.join(
+        p for p in path_entries
+        if p and p not in seen and not seen.add(p)
+    )
+
+    # Strip RTK and other Claude Code hooks from the child process environment.
+    # The PreToolUse hook rewrites shell commands (curl -> rtk curl) and filters
+    # output for token savings, which breaks Quill's ability to parse API JSON.
+    child_env.pop("CLAUDE_CODE_HOOKS", None)
+    child_env["RTK_DISABLE"] = "1"
+    child_env["NO_RTK"] = "1"
+    return child_env
 
 
 async def spawn_cli(
@@ -40,13 +84,7 @@ async def spawn_cli(
 
     Raises `asyncio.TimeoutError` if total runtime exceeds `timeout_s`.
     """
-    # Strip RTK and other Claude Code hooks from the child process environment.
-    # The PreToolUse hook rewrites shell commands (curl → rtk curl) and filters
-    # output for token savings, which breaks Quill's ability to parse API JSON.
-    child_env = {**os.environ, **(env or {})}
-    child_env.pop("CLAUDE_CODE_HOOKS", None)
-    child_env["RTK_DISABLE"] = "1"
-    child_env["NO_RTK"] = "1"
+    child_env = cli_child_env(env)
 
     proc = await _create_proc(
         *argv,

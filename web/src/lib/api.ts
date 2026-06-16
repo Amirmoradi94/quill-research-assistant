@@ -514,12 +514,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let r: Response
   const retryDelays = isIdempotentRequest(init) ? STARTUP_RETRY_DELAYS_MS : []
   let lastError = ''
+  const method = init?.method?.toUpperCase() ?? 'GET'
 
   for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
     try {
       r = await fetch(apiUrl(path), {
         ...init,
-        headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+        headers: {
+          ...(method === 'GET' || method === 'HEAD' ? {} : { 'Content-Type': 'application/json' }),
+          ...(init?.headers || {}),
+        },
       })
       if (!r.ok) {
         throw new ApiHttpError(`${r.status} ${r.statusText} · ${path}`)

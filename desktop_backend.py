@@ -30,7 +30,7 @@ def main() -> None:
     os.environ.setdefault(
         "POSTDOC_CORS_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://tauri.localhost,https://tauri.localhost,tauri://localhost",
+        "http://tauri.localhost,https://tauri.localhost,tauri://localhost,null",
     )
     configure_logging()
     port = int(os.environ.get("PORT", "8000"))

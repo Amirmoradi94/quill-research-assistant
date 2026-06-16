@@ -83,14 +83,29 @@ to mention a specific paper, you MUST do so in the draft.
 
 ## Email rules — follow strictly
 
+Every email body must start with this salutation on its own line:
+`Dear Professor {{ professor.name.split()[-1] }},`
+
+Never output square-bracket placeholder text. If a fact is unavailable, omit
+that clause or use the verified legacy field already present in the applicant
+profile.
+
 {% if professor.position_type == "postdoc" or not professor.position_type %}
-**Subject format:** `Postdoc inquiry: [specific research keyword phrase]`
+**Subject format:** Start with `Postdoc inquiry:` followed by a specific research keyword phrase.
 
 **Structure (4 paragraphs):**
 
 P1 — Who you are + why writing + hook:
 {% set phd = (user.education or []) | selectattr("degree_level", "equalto", "PhD") | first %}
-"I am {{ user.preferred_name or user.name }}. I have completed my Ph.D. in {{ phd.field if phd else "[field]" }} at {{ phd.institution if phd else "[institution]" }}{% if phd and phd.advisor_name %}, under the supervision of {{ phd.advisor_name }}{% if phd.co_advisor_name %} and {{ phd.co_advisor_name }}{% endif %}{% else %}, under the supervision of [advisor]{% endif %}. I am writing to inquire about postdoctoral opportunities in your group. [One sentence on a specific paper or project of theirs and why it resonates.]"
+After the salutation, introduce the applicant using verified details:
+{% if phd %}
+"I am {{ user.preferred_name or user.name }}. I have completed my Ph.D. in {{ phd.field }} at {{ phd.institution }}{% if phd.advisor_name %}, under the supervision of {{ phd.advisor_name }}{% if phd.co_advisor_name %} and {{ phd.co_advisor_name }}{% endif %}{% endif %}. I am writing to inquire about postdoctoral opportunities in your group."
+{% elif user.phd_year or user.phd_institution %}
+"I am {{ user.preferred_name or user.name }}. I completed my Ph.D.{% if user.phd_institution %} at {{ user.phd_institution }}{% endif %}{% if user.phd_year %} in {{ user.phd_year }}{% endif %}. I am writing to inquire about postdoctoral opportunities in your group."
+{% else %}
+"I am {{ user.preferred_name or user.name }}, {{ user.current_role }} at {{ user.affiliation }}. I am writing to inquire about postdoctoral opportunities in your group."
+{% endif %}
+Then add one sentence on a specific paper or project of theirs and why it resonates.
 
 P2 — Your research and publications:
 Name the 1-2 most relevant publications with full journal/conference names and year.
@@ -107,7 +122,7 @@ P4 — CTA:
 {% endif %}
 
 {% if professor.position_type == "phd" %}
-**Subject format:** `PhD application inquiry: [specific research keyword phrase]`
+**Subject format:** Start with `PhD application inquiry:` followed by a specific research keyword phrase.
 
 **Structure (4 paragraphs):**
 
@@ -128,7 +143,7 @@ P4 — CTA:
 {% endif %}
 
 {% if professor.position_type == "master" %}
-**Subject format:** `Master's research inquiry: [specific research keyword phrase]`
+**Subject format:** Start with `Master's research inquiry:` followed by a specific research keyword phrase.
 
 **Structure (3-4 paragraphs):**
 
@@ -154,6 +169,10 @@ P4 — CTA:
 The user has asked for the following adjustments to be applied to this
 particular email. They override any general guidance below (except the hard
 style rules at the bottom — em-dashes, IEEE names, no dataset offers).
+If this contains a full email template, follow its structure, paragraph order,
+subject requirements, and reusable wording where compatible with verified
+facts. Replace placeholders with verified facts. Omit template clauses that
+depend on facts that are unavailable or unverified.
 
 ```
 {{ user_instructions }}

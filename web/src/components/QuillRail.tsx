@@ -489,13 +489,49 @@ function ProviderSelect({
   onSelect: (provider: QuillProvider) => void
   disabled: boolean
 }) {
+  if (providers) {
+    const options: { value: QuillProvider; label: string; available: boolean }[] = [
+      { value: 'claude_cli', label: 'Claude', available: providers.claude_cli.available },
+      { value: 'codex_cli', label: 'Codex', available: providers.codex_cli.available },
+    ]
+    return (
+      <div
+        className="inline-flex overflow-hidden rounded-full border p-0.5"
+        style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}
+        aria-label="Quill provider"
+      >
+        {options.map((option) => {
+          const active = selected === option.value
+          return (
+            <button
+              key={option.value}
+              type="button"
+              disabled={disabled || !option.available}
+              onClick={() => onSelect(option.value)}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+              style={{
+                background: active ? 'var(--color-white)' : 'transparent',
+                color: active ? 'var(--color-green-700)' : 'var(--color-muted)',
+                boxShadow: active ? '0 1px 2px rgba(17,24,39,0.08)' : 'none',
+              }}
+              title={option.available ? `Use ${option.label} for Quill` : `${option.label} CLI not detected`}
+            >
+              <CircleDot size={10} />
+              {option.label}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
   if (error) {
     return (
       <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
         title={error}
-        style={{ background: 'var(--color-rose-50)', color: 'var(--color-rose-700)', borderColor: 'var(--color-line)' }}>
-        <AlertCircle size={10} />
-        backend offline
+        style={{ background: 'var(--color-amber-50)', color: 'var(--color-amber-700)', borderColor: 'var(--color-line)' }}>
+        <Loader size={10} className="animate-spin" />
+        provider
       </span>
     )
   }
@@ -508,39 +544,6 @@ function ProviderSelect({
       </span>
     )
   }
-  const options: { value: QuillProvider; label: string; available: boolean }[] = [
-    { value: 'claude_cli', label: 'Claude', available: providers.claude_cli.available },
-    { value: 'codex_cli', label: 'Codex', available: providers.codex_cli.available },
-  ]
-  return (
-    <div
-      className="inline-flex overflow-hidden rounded-full border p-0.5"
-      style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}
-      aria-label="Quill provider"
-    >
-      {options.map((option) => {
-        const active = selected === option.value
-        return (
-          <button
-            key={option.value}
-            type="button"
-            disabled={disabled || !option.available}
-            onClick={() => onSelect(option.value)}
-            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-            style={{
-              background: active ? 'var(--color-white)' : 'transparent',
-              color: active ? 'var(--color-green-700)' : 'var(--color-muted)',
-              boxShadow: active ? '0 1px 2px rgba(17,24,39,0.08)' : 'none',
-            }}
-            title={option.available ? `Use ${option.label} for Quill` : `${option.label} CLI not detected`}
-          >
-            <CircleDot size={10} />
-            {option.label}
-          </button>
-        )
-      })}
-    </div>
-  )
 }
 
 function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: QuillProvider }) {

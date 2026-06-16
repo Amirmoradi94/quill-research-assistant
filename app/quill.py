@@ -66,7 +66,7 @@ TRUSTED_AI_ORIGINS = {
         "POSTDOC_AI_TRUSTED_ORIGINS",
         "http://localhost:8000,http://127.0.0.1:8000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://tauri.localhost,https://tauri.localhost,tauri://localhost",
+        "http://tauri.localhost,https://tauri.localhost,tauri://localhost,null",
     ).split(",")
     if o.strip()
 }
@@ -431,8 +431,17 @@ def _allowed_tools_for(workflow: Workflow) -> list[str]:
 def _resolve_user_context(db: Session) -> dict[str, Any]:
     """Build the {user, professor, document, grant} dict that prompts expect."""
     user = db.get(models.User, 1)
+    if user is not None:
+        user_ctx = _shim(user)
+        user_ctx["education"] = [_shim(row) for row in user.education]
+        user_ctx["publications"] = [_shim(row) for row in user.publications]
+        user_ctx["experience"] = [_shim(row) for row in user.experience]
+        user_ctx["awards"] = [_shim(row) for row in user.awards]
+        user_ctx["references"] = [_shim(row) for row in user.references]
+    else:
+        user_ctx = _shim(None, default={"name": "the user", "current_role": "researcher", "affiliation": "(unknown)", "research_interests": "(unknown)"})
     return {
-        "user": _shim(user, default={"name": "the user", "current_role": "researcher", "affiliation": "(unknown)", "research_interests": "(unknown)"}),
+        "user": user_ctx,
     }
 
 
