@@ -14,6 +14,7 @@ import {
   Settings,
   User as UserIcon,
   Wrench,
+  Zap,
 } from 'lucide-react'
 import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
@@ -32,8 +33,10 @@ const NAV = [
   { to: '/calendar',   label: 'Calendar',   icon: CalendarDays },
 ] as const
 
-// Activity + AI Runs hidden from sidebar but routes remain accessible by URL.
-const NAV_INSIGHTS: ReadonlyArray<{ to: string; label: string; icon: typeof TrendingUp }> = []
+// Activity remains hidden from sidebar but routes remain accessible by URL.
+const NAV_INSIGHTS: ReadonlyArray<{ to: string; label: string; icon: typeof TrendingUp | typeof Zap }> = [
+  { to: '/ai-runs', label: 'Recovery', icon: Zap },
+]
 // const NAV_INSIGHTS = [
 //   { to: '/activity', label: 'Activity', icon: TrendingUp },
 //   { to: '/ai-runs',  label: 'AI Runs',  icon: Zap },

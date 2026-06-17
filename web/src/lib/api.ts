@@ -77,7 +77,7 @@ export type AIRun = {
   id: number
   workflow: string
   provider: string
-  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted' | 'deferred' | 'retried'
   cost_usd: number | null
   tokens_in: number | null
   tokens_out: number | null

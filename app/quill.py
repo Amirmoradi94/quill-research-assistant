@@ -310,9 +310,26 @@ def _setup_terminal_command(provider: str, action: str) -> str:
 
 def _classify_ai_error(text: str | None) -> str:
     lower = (text or "").lower()
-    if any(s in lower for s in ("rate limit", "rate_limit", "too many requests", "429")):
+    if any(s in lower for s in (
+        "rate limit",
+        "rate_limit",
+        "rate_limit_exceeded",
+        "too many requests",
+        "429",
+    )):
         return "rate_limit"
-    if any(s in lower for s in ("quota", "usage limit", "credit balance", "billing", "insufficient_quota")):
+    if any(s in lower for s in (
+        "quota",
+        "usage limit",
+        "usage limit reached",
+        "daily limit",
+        "weekly limit",
+        "limit resets",
+        "credit balance",
+        "billing",
+        "insufficient_quota",
+        "exceeded your current quota",
+    )):
         return "quota_limit"
     if any(s in lower for s in ("timed out", "timeout", "deadline")):
         return "timeout"
@@ -323,6 +340,45 @@ def _classify_ai_error(text: str | None) -> str:
     if any(s in lower for s in ("json", "parse", "decode")):
         return "parse_error"
     return "unknown"
+
+
+PROVIDER_LIMIT_ERROR_TYPES = {"rate_limit", "quota_limit"}
+
+
+def _provider_label(provider: Provider | str) -> str:
+    value = provider.value if isinstance(provider, Provider) else provider
+    return {
+        "claude_cli": "Claude",
+        "codex_cli": "Codex",
+        "anthropic_api": "Anthropic API",
+        "openai_api": "OpenAI API",
+    }.get(value, value.replace("_", " "))
+
+
+def _workflow_label(workflow: Workflow | str) -> str:
+    value = workflow.value if isinstance(workflow, Workflow) else workflow
+    return value.replace("_", " ")
+
+
+def _event_error_text(data: dict[str, Any]) -> str:
+    return "\n".join(
+        str(data.get(key) or "")
+        for key in ("message", "error", "stderr", "raw_error")
+        if data.get(key)
+    )
+
+
+def _provider_limit_user_message(provider: Provider, workflow: Workflow) -> str:
+    return (
+        f"{_provider_label(provider)} reported a usage limit while Quill was running "
+        f"{_workflow_label(workflow)}. Quill saved this task in the Recovery Queue. "
+        "When the provider limit resets, open AI Runs and rerun it, or use Fallback "
+        "to retry with another available provider."
+    )
+
+
+def _is_provider_limit_error(error_type: str | None) -> bool:
+    return bool(error_type in PROVIDER_LIMIT_ERROR_TYPES)
 
 
 def _run_input_payload(req: RunIn) -> dict[str, Any]:
@@ -1271,6 +1327,17 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
             async for evt in runner_stream(request, provider=provider, cli_path=cli_path):
                 if evt.kind == "text":
                     full_text_parts.append(evt.data.get("text", ""))
+                if evt.kind == "error":
+                    raw_error = _event_error_text(evt.data)
+                    error_type = _classify_ai_error(raw_error)
+                    if _is_provider_limit_error(error_type):
+                        evt.data = {
+                            "message": _provider_limit_user_message(provider, request.workflow),
+                            "error_type": error_type,
+                            "retryable": True,
+                            "deferred": True,
+                            "raw_error": raw_error,
+                        }
                 if evt.kind in ("done", "error", "parsed"):
                     last_event = evt.data
                 if evt.kind == "done":
@@ -1294,13 +1361,22 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
         full_text = "".join(full_text_parts)
         run = db.get(models.AIRun, run_id)
         if run:
+            raw_failure_text = (
+                last_event.get("raw_error")
+                or last_event.get("message")
+                or last_event.get("error")
+                or last_event.get("stderr")
+                or (None if got_done else "AI run ended before a completion event was received.")
+            )
+            error_type = _classify_ai_error(str(raw_failure_text or ""))
             failure_text = (
                 last_event.get("message")
                 or last_event.get("error")
                 or last_event.get("stderr")
                 or (None if got_done else "AI run ended before a completion event was received.")
             )
-            run.status = "failed" if last_event.get("ok") is False or "error" in last_event or not got_done else "done"
+            failed = last_event.get("ok") is False or "error" in last_event or not got_done
+            run.status = "deferred" if failed and _is_provider_limit_error(error_type) else ("failed" if failed else "done")
             run.completed_at = datetime.utcnow()
             run.duration_ms = int((time.monotonic() - started_wallclock) * 1000)
             run.cost_usd = last_event.get("cost_usd")
@@ -1308,9 +1384,13 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
             run.tokens_in = usage.get("input_tokens")
             run.tokens_out = usage.get("output_tokens")
             run.output = full_text or last_event.get("result")
-            if run.status == "failed":
-                run.error_message = str(failure_text or "AI run failed.")
-                run.error_type = _classify_ai_error(run.error_message)
+            if run.status in {"failed", "deferred"}:
+                run.error_type = error_type
+                run.error_message = (
+                    _provider_limit_user_message(provider, request.workflow)
+                    if run.status == "deferred"
+                    else str(failure_text or "AI run failed.")
+                )
             db.commit()
 
         # Write workflow-specific results back to the DB.
@@ -1322,14 +1402,30 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
         try:
             run = db.get(models.AIRun, run_id)
             if run and run.status == "running":
+                error_type = _classify_ai_error(str(exc))
                 run.status = "failed"
                 run.completed_at = datetime.utcnow()
                 run.duration_ms = int((time.monotonic() - started_wallclock) * 1000)
-                run.error_message = str(exc)
-                run.error_type = _classify_ai_error(run.error_message)
+                if _is_provider_limit_error(error_type):
+                    run.status = "deferred"
+                    run.error_message = _provider_limit_user_message(provider, request.workflow)
+                else:
+                    run.error_message = str(exc)
+                run.error_type = error_type
                 run.output = f"[error] {exc}"
                 db.commit()
-            err_evt = StreamEvent(kind="error", data={"error": str(exc)})
+            if _is_provider_limit_error(_classify_ai_error(str(exc))):
+                err_evt = StreamEvent(
+                    kind="error",
+                    data={
+                        "message": _provider_limit_user_message(provider, request.workflow),
+                        "error_type": _classify_ai_error(str(exc)),
+                        "retryable": True,
+                        "deferred": True,
+                    },
+                )
+            else:
+                err_evt = StreamEvent(kind="error", data={"error": str(exc)})
             yield err_evt.to_sse().encode()
         except Exception:
             pass
@@ -1558,6 +1654,13 @@ def retry_run(
         provider_override=provider_override,
         retry_of_run_id=old.id,
     )
+    if old.status == "deferred" or _is_provider_limit_error(old.error_type):
+        old.status = "retried"
+        old.error_message = (
+            f"{old.error_message or 'Task was restarted.'}\n\n"
+            f"Restarted as AI run #{new_run.id}."
+        )
+        db.commit()
     background_tasks.add_task(_drain_run, new_run.id, run_request, provider, cli_path)
     return new_run
 
