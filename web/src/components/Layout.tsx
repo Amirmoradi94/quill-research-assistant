@@ -37,6 +37,7 @@ export function Layout() {
   useEffect(() => {
     if (location.pathname === '/setup') return
     if (localStorage.getItem('postdoc.setup.completed') === 'true') return
+    if (location.pathname !== '/' && location.pathname !== '/home') return
 
     let cancelled = false
     let retry: ReturnType<typeof setTimeout> | null = null
