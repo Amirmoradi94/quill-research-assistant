@@ -1,6 +1,6 @@
 [package]
 name = "quill-research-assistant"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local desktop shell for Quill AI"
 authors = ["Quill AI"]
 edition = "2021"

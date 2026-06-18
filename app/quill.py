@@ -54,6 +54,7 @@ from ai.runner import (  # noqa: E402
     select_provider,
     stream as runner_stream,
 )
+from ai.cli import cli_child_env  # noqa: E402
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -180,7 +181,7 @@ def _run_probe(argv: list[str], timeout_s: int = 8) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env={**os.environ, "RTK_DISABLE": "1", "NO_RTK": "1"},
+            env=cli_child_env(),
         )
         return {
             "ok": proc.returncode == 0,
@@ -295,9 +296,15 @@ def _setup_terminal_command(provider: str, action: str) -> str:
     else:
         raise HTTPException(400, "Unsupported provider setup action.")
 
+    path_prefix = (
+        'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:'
+        '$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.volta/bin:'
+        '$HOME/.codex/bin:$HOME/.claude/local:$HOME/.claude/bin:$PATH"'
+    )
     return (
         f"echo {shlex.quote(title)}; "
         "echo; "
+        f"{path_prefix}; "
         f"{body}; "
         "status=$?; echo; "
         'if [ "$status" -eq 0 ]; then echo "Finished. Return to Quill and click Recheck."; '
@@ -366,6 +373,11 @@ def _event_error_text(data: dict[str, Any]) -> str:
         for key in ("message", "error", "stderr", "raw_error")
         if data.get(key)
     )
+
+
+def _runtime_api_base() -> str:
+    port = os.environ.get("PORT", "8000")
+    return os.environ.get("POSTDOC_API_BASE", f"http://127.0.0.1:{port}").rstrip("/")
 
 
 def _provider_limit_user_message(provider: Provider, workflow: Workflow) -> str:
@@ -1496,6 +1508,7 @@ def _prepare_ai_run(
 
     # Hydrate the user/professor/document/grant Jinja vars if the prompt expects them.
     base_ctx = _resolve_user_context(db)
+    base_ctx["api_base"] = _runtime_api_base()
     if req.professor_id is not None:
         prof = db.get(models.Professor, req.professor_id)
         if prof is not None:

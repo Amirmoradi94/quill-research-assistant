@@ -70,15 +70,28 @@ def resolve_cli_path(command: str, configured_path: str | None = None) -> str | 
         return path
 
     home = Path.home()
-    for directory in (
-        Path("/opt/homebrew/bin"),
-        Path("/usr/local/bin"),
-        home / ".local" / "bin",
-        home / ".npm-global" / "bin",
-        home / ".codex" / "bin",
-        home / ".claude" / "local",
-        home / ".claude" / "bin",
-    ):
+    if command == "codex":
+        search_dirs = (
+            home / ".local" / "bin",
+            home / ".codex" / "bin",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            home / ".npm-global" / "bin",
+            home / ".volta" / "bin",
+        )
+    else:
+        search_dirs = (
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            home / ".local" / "bin",
+            home / ".npm-global" / "bin",
+            home / ".volta" / "bin",
+            home / ".codex" / "bin",
+            home / ".claude" / "local",
+            home / ".claude" / "bin",
+        )
+
+    for directory in search_dirs:
         candidate = directory / command
         if candidate.exists() and os.access(candidate, os.X_OK):
             return str(candidate)
@@ -452,7 +465,7 @@ async def stream(
                     kind="error",
                     data={
                         "message": f"Subprocess exited with code {line.returncode}",
-                        "stderr": line.stderr[-2000:],
+                        "raw_error": line.stderr[-2000:],
                     },
                 )
             return
