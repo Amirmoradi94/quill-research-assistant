@@ -1,13 +1,17 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
-export default defineConfig(() => {
+export default defineConfig(async () => {
   const disableTailwindVite = process.env.DISABLE_TAILWIND_VITE === '1'
+  const disableReactVite = process.env.DISABLE_REACT_VITE === '1'
+  const tailwindPlugin = disableTailwindVite
+    ? []
+    : [(await import('@tailwindcss/vite')).default()]
+  const reactPlugin = disableReactVite ? [] : [react()]
 
   return {
-    plugins: [react(), ...(disableTailwindVite ? [] : [tailwindcss()])],
+    plugins: [...reactPlugin, ...tailwindPlugin],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
