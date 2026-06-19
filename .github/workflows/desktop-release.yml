@@ -23,9 +23,6 @@ jobs:
           - name: macOS Intel
             os: macos-13
             updaterTarget: darwin-x86_64
-          - name: Windows
-            os: windows-latest
-            updaterTarget: windows-x86_64
           - name: Linux
             os: ubuntu-24.04
             updaterTarget: linux-x86_64
