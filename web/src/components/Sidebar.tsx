@@ -7,7 +7,6 @@ import {
   SendHorizontal,
   CheckCheck,
   GraduationCap,
-  DollarSign,
   Folder,
   CalendarDays,
   TrendingUp,
@@ -28,7 +27,6 @@ const NAV = [
   { to: '/batches',    label: 'Batches',    icon: SendHorizontal },
   { to: '/sent',       label: 'Sent',       icon: CheckCheck },
   { to: '/interview-prep', label: 'Interview Prep', icon: GraduationCap },
-  { to: '/grants',     label: 'Grants',     icon: DollarSign },
   { to: '/documents',  label: 'Documents',  icon: Folder },
   { to: '/calendar',   label: 'Calendar',   icon: CalendarDays },
 ] as const

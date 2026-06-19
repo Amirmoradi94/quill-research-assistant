@@ -179,7 +179,7 @@ export function Home() {
     if (drafts.length > 0) tasks.push({ id: 'drafts', title: `${drafts.length} drafts ready`, detail: 'Review and send outreach', icon: Mail, to: '/drafts' })
     if (unreadReplies > 0) tasks.push({ id: 'replies', title: `${unreadReplies} unread replies`, detail: 'Response queue needs review', icon: MessageCircle, to: '/sent' })
     events.slice(0, 2).forEach((event) => tasks.push({ id: `event-${event.id}`, title: event.title, detail: shortDate(event.date), icon: CalendarDays, to: '/calendar' }))
-    grants.filter((grant) => grant.deadline).slice(0, 2).forEach((grant) => tasks.push({ id: `grant-${grant.id}`, title: grant.name, detail: `Deadline ${shortDate(grant.deadline)}`, icon: Target, to: '/grants' }))
+    grants.filter((grant) => grant.deadline).slice(0, 2).forEach((grant) => tasks.push({ id: `grant-${grant.id}`, title: grant.name, detail: `Deadline ${shortDate(grant.deadline)}`, icon: Target, to: '/calendar' }))
     return tasks.slice(0, 6)
   }, [drafts.length, events, followupsDue, grants, unreadReplies])
 

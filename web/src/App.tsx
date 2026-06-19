@@ -3,7 +3,6 @@ import { Layout } from '@/components/Layout'
 import { Home } from '@/pages/Home'
 import { Professors } from '@/pages/Professors'
 import { Drafts } from '@/pages/Drafts'
-import { Grants } from '@/pages/Grants'
 import { Discover } from '@/pages/Discover'
 import { Batches } from '@/pages/Batches'
 import { Sent } from '@/pages/Sent'
@@ -33,7 +32,6 @@ export default function App() {
           <Route path="batches"    element={<Batches />} />
           <Route path="sent"       element={<Sent />} />
           <Route path="interview-prep" element={<InterviewPrep />} />
-          <Route path="grants"     element={<Grants />} />
           <Route path="documents"  element={<Documents />} />
           <Route path="calendar"   element={<CalendarPage />} />
           <Route path="activity"   element={<ActivityPage />} />
