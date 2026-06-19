@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -b",
-    "bundle": "node scripts/build-tailwind.mjs && node scripts/patch-dist-css.mjs",
+    "bundle": "node scripts/build-tailwind.mjs && vite build && node scripts/patch-dist-css.mjs",
     "build": "npm run typecheck && npm run bundle",
     "lint": "eslint .",
     "preview": "vite preview",

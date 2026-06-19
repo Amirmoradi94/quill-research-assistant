@@ -5,7 +5,7 @@
   "identifier": "local.quill.researchassistant",
   "build": {
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "VITE_API_BASE=http://127.0.0.1:8000 npm run bundle",
+    "beforeBuildCommand": "npm run bundle",
     "frontendDist": "../dist"
   },
   "app": {
