@@ -29,8 +29,8 @@ if [ -z "$target_triple" ]; then
 fi
 
 ext=""
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) ext=".exe" ;;
+case "${OS:-$(uname -s 2>/dev/null || true)}" in
+  Windows_NT|MINGW*|MSYS*|CYGWIN*) ext=".exe" ;;
 esac
 
 mkdir -p "$ROOT/web/src-tauri/binaries"
