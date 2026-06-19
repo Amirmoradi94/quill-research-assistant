@@ -168,7 +168,7 @@ export function Settings() {
       )}
 
       <Section icon={<Bell size={16} />} title="Desktop notifications"
-        desc="Quill can show native macOS notifications for calendar reminders, meetings, and deadlines while the app is open.">
+        desc="Quill can send native macOS notifications for calendar reminders, meetings, and deadlines. macOS may suppress banners while Quill is frontmost or Focus is enabled.">
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={async () => {

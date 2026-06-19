@@ -108,7 +108,10 @@ export async function sendQuillNotification(title: string, body?: string): Promi
   if (!permission.ok) return permission
   try {
     sendNotification({ title, body, group: 'quill-reminders' })
-    return { ok: true, message: 'Notification sent.' }
+    return {
+      ok: true,
+      message: 'Sent to macOS. If no banner appears, check Notification Center, Focus mode, and System Settings > Notifications > Quill AI.',
+    }
   } catch (e: any) {
     return { ok: false, message: e?.message || String(e) }
   }
@@ -117,7 +120,7 @@ export async function sendQuillNotification(title: string, body?: string): Promi
 export function sendTestNotification() {
   return sendQuillNotification(
     'Quill reminder test',
-    'Desktop notifications are working.',
+    'If Quill is frontmost, macOS may place this in Notification Center instead of showing a banner.',
   )
 }
 
