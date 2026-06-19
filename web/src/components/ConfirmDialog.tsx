@@ -62,7 +62,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
     <ConfirmCtx.Provider value={confirm}>
       {children}
       {state && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in"
+        <div className="quill-type-scale fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in"
           role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
             onClick={() => close(false)} />

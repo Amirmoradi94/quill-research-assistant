@@ -1185,7 +1185,7 @@ function ChipField({ label, values, onSave, renderChip, chipStyle, icon: Icon, c
         {values.map((v) => (
           <span key={v} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[12px]"
             style={chipStyle ? chipStyle(v) : { background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}>
-            {renderChip ? renderChip(v) : v}
+            {renderChip ? renderChip(v) : titleize(v)}
             <button onClick={() => remove(v)} style={{ color: 'var(--color-muted)' }} className="hover:opacity-100 opacity-60">
               <X size={10} />
             </button>

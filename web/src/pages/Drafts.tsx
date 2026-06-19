@@ -4,6 +4,7 @@ import {
   Archive,
   CheckCircle2,
   ChevronRight,
+  FileText,
   FileUp,
   Mail,
   Paperclip,
@@ -15,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type Draft, type Professor } from '@/lib/api'
+import { api, type DocumentRow, type Draft, type Professor } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
 import { useConfirm } from '@/components/ConfirmDialog'
@@ -52,6 +53,8 @@ export function Drafts() {
   const [showSkipped, setShowSkipped] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [gmailConnected, setGmailConnected] = useState(false)
+  const [docs, setDocs] = useState<DocumentRow[]>([])
+  const [defaultCvDocId, setDefaultCvDocId] = useState<number | null>(null)
   const [sendingId, setSendingId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -68,6 +71,8 @@ export function Drafts() {
     reloadSeqRef.current = requestId
     setRefreshing(true)
     const settingsPromise = api.settings().catch(() => null)
+    const docsPromise = api.documents().catch(() => null)
+    const userPromise = api.user().catch(() => null)
     try {
       const rows = await api.drafts()
       if (requestId !== reloadSeqRef.current) return
@@ -91,9 +96,11 @@ export function Drafts() {
       if (requestId !== reloadSeqRef.current) return
       setErr(errorMessage(e))
     } finally {
-      const settings = await settingsPromise
+      const [settings, documentRows, user] = await Promise.all([settingsPromise, docsPromise, userPromise])
       if (requestId === reloadSeqRef.current) {
         if (settings) setGmailConnected(!!settings.gmail_connected)
+        if (documentRows) setDocs(documentRows)
+        if (user) setDefaultCvDocId(user.cv_doc_id || null)
         setRefreshing(false)
       }
     }
@@ -142,14 +149,10 @@ export function Drafts() {
   }), [activeDrafts, category, q, showSkipped])
 
   useEffect(() => {
-    if (filtered.length === 0) {
-      setSelectedId(null)
-      return
-    }
-    if (!selectedId || !filtered.some((d) => d.id === selectedId)) setSelectedId(filtered[0].id)
+    if (selectedId && !filtered.some((d) => d.id === selectedId)) setSelectedId(null)
   }, [filtered, selectedId])
 
-  const selected = filtered.find((d) => d.id === selectedId) ?? filtered[0] ?? null
+  const selected = filtered.find((d) => d.id === selectedId) ?? null
 
   const metrics = useMemo(() => {
     const skipped = activeDrafts.filter((d) => d.skipped_at).length
@@ -290,9 +293,16 @@ export function Drafts() {
     setBusyAction(`upload-${draft.id}`)
     try {
       const result = await api.uploadDraftAttachment(draft.id, file)
+      setDocs((prev) => {
+        const withoutUploaded = prev.filter((doc) => doc.id !== result.uploaded_document.id)
+        return [result.uploaded_document, ...withoutUploaded]
+      })
       setDrafts((prev) => prev.map((d) => (
         d.id === draft.id ? { ...d, attachment_doc_ids: result.attachment_doc_ids } : d
       )))
+      api.draft(draft.id)
+        .then((fresh) => patchDraftInState({ ...draft, ...fresh }))
+        .catch(() => {})
       setToastTimed({ ok: true, text: `Attached ${result.uploaded_document.filename || file.name}.` })
     } catch (e: any) {
       setToastTimed({ ok: false, text: e?.message || String(e) })
@@ -389,23 +399,31 @@ export function Drafts() {
           onClear={clearFilters}
         />
 
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,0.92fr)_minmax(360px,1.08fr)] gap-3 items-start">
-          <DraftQueue drafts={filtered} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
-          <DraftPanel
-            draft={selected}
-            gmailConnected={gmailConnected}
-            sending={selected ? sendingId === selected.id : false}
-            busyAction={busyAction}
-            onSaved={patchDraftInState}
-            onRedraft={(draft) => setRedraftFor(draft)}
-            onSend={sendViaGmail}
-            onMarkSent={markSent}
-            onSkip={toggleSkip}
-            onDelete={deleteDraft}
-            onUpload={uploadAttachment}
-          />
-        </div>
+        <DraftQueue drafts={filtered} onSelect={setSelectedId} />
       </div>
+
+      {selected && (
+        <DraftModal
+          draft={selected}
+          docs={docs}
+          defaultCvDocId={defaultCvDocId}
+          gmailConnected={gmailConnected}
+          sending={sendingId === selected.id}
+          busyAction={busyAction}
+          onClose={() => setSelectedId(null)}
+          onSaved={patchDraftInState}
+          onRedraft={(draft) => setRedraftFor(draft)}
+          onSend={sendViaGmail}
+          onMarkSent={markSent}
+          onSkip={toggleSkip}
+          onDelete={deleteDraft}
+          onUpload={uploadAttachment}
+          onPatch={async (draft, patch) => {
+            const updated = await api.patchDraft(draft.id, patch)
+            patchDraftInState({ ...draft, ...updated })
+          }}
+        />
+      )}
 
       {redraftFor && (
         <RedraftModal
@@ -619,45 +637,75 @@ function FilterBar({
   )
 }
 
-function DraftQueue({ drafts, selectedId, onSelect }: { drafts: Draft[]; selectedId: number | null; onSelect: (id: number) => void }) {
+function DraftQueue({ drafts, onSelect }: { drafts: Draft[]; onSelect: (id: number) => void }) {
   return (
     <section className="rounded-md border overflow-hidden"
       style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-      <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
-        <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Draft queue</h2>
-        <div className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-          {drafts.length ? `${drafts.length} drafts ready for review` : 'No matching drafts'}
+      <div className="px-3 py-2 border-b flex items-center justify-between gap-3"
+        style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
+        <div>
+          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Draft queue</h2>
+          <div className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
+            {drafts.length ? `${drafts.length} drafts ready for review` : 'No matching drafts'}
+          </div>
         </div>
+        <span className="hidden md:inline text-[11px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>
+          Click a row to review
+        </span>
       </div>
-      <div>
+      <div className="hidden lg:grid grid-cols-[minmax(190px,0.95fr)_minmax(280px,1.45fr)_130px_115px_105px_82px_24px] gap-3 px-3 py-2 border-b text-[11px] uppercase tracking-[0.08em]"
+        style={{ borderColor: 'var(--color-line)', color: 'var(--color-muted)', background: 'color-mix(in srgb, var(--color-paper) 70%, var(--color-white))' }}>
+        <span>Professor</span>
+        <span>Subject</span>
+        <span>Category</span>
+        <span>Status</span>
+        <span>Attachments</span>
+        <span>Updated</span>
+        <span />
+      </div>
+      <div className="divide-y" style={{ borderColor: 'var(--color-line)' }}>
         {drafts.map((draft) => (
           <button
             key={draft.id}
             onClick={() => onSelect(draft.id)}
-            className="w-full border-b last:border-b-0 px-3 py-3 text-left hover:bg-[color:var(--color-paper-2)]"
-            style={{
-              borderColor: 'var(--color-line)',
-              background: selectedId === draft.id ? 'var(--color-brand-50)' : 'transparent',
-            }}
+            className="group w-full px-3 py-3 text-left hover:bg-[color:var(--color-paper-2)] transition-colors"
+            style={{ background: 'transparent' }}
           >
-            <div className="flex items-start gap-2">
-              <Mail size={14} className="mt-1 shrink-0" style={{ color: 'var(--color-brand-600)' }} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-ink)' }}>
+            <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(190px,0.95fr)_minmax(280px,1.45fr)_130px_115px_105px_82px_24px] lg:items-center lg:gap-3">
+              <div className="min-w-0 flex items-start gap-2">
+                <Mail size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--color-brand-600)' }} />
+                <div className="min-w-0">
+                  <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-ink)' }}>
                     {draft.professor_name || `Professor #${draft.professor_id}`}
-                  </span>
-                  {draft.skipped_at && <SmallBadge label="skipped" tone="amber" />}
-                  {(draft.attachment_doc_ids?.length ?? 0) > 0 && <Paperclip size={12} style={{ color: 'var(--color-muted)' }} />}
-                  <ChevronRight size={13} className="ml-auto shrink-0" style={{ color: 'var(--color-muted)' }} />
-                </div>
-                <div className="text-[12px] mt-0.5 truncate" style={{ color: 'var(--color-ink-soft)' }}>{draft.subject || '(no subject)'}</div>
-                <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                  {draft.professor_research_category && <CatChip cat={draft.professor_research_category} />}
-                  {draft.professor_university && <span className="text-[11px]" style={{ color: 'var(--color-muted)' }}>{draft.professor_university}</span>}
-                  <span className="text-[11px] font-mono ml-auto" style={{ color: 'var(--color-muted)' }}>{shortDate(draft.updated_at)}</span>
+                  </div>
+                  <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                    {draft.professor_university || 'No university'}
+                  </div>
                 </div>
               </div>
+              <div className="min-w-0">
+                <div className="text-[13px] truncate" style={{ color: 'var(--color-ink-soft)' }}>
+                  {draft.subject || '(no subject)'}
+                </div>
+                <div className="text-[11px] mt-0.5 lg:hidden" style={{ color: 'var(--color-muted)' }}>
+                  Updated {shortDate(draft.updated_at)}
+                </div>
+              </div>
+              <div>
+                {draft.professor_research_category ? <CatChip cat={draft.professor_research_category} /> : <span className="text-[11px]" style={{ color: 'var(--color-muted)' }}>Uncategorized</span>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <SmallBadge label={draft.professor_status || 'drafting'} tone={draft.professor_status === 'drafting' ? 'muted' : 'green'} />
+                {draft.skipped_at && <SmallBadge label="skipped" tone="amber" />}
+              </div>
+              <div className="text-[12px] flex items-center gap-1.5" style={{ color: 'var(--color-muted)' }}>
+                <Paperclip size={12} />
+                {draft.attachment_doc_ids?.length ?? 0}
+              </div>
+              <div className="hidden lg:block text-[11px] font-mono" style={{ color: 'var(--color-muted)' }}>
+                {shortDate(draft.updated_at)}
+              </div>
+              <ChevronRight size={14} className="hidden lg:block justify-self-end transition-transform group-hover:translate-x-0.5" style={{ color: 'var(--color-muted)' }} />
             </div>
           </button>
         ))}
@@ -673,11 +721,14 @@ function DraftQueue({ drafts, selectedId, onSelect }: { drafts: Draft[]; selecte
   )
 }
 
-function DraftPanel({
+function DraftModal({
   draft,
+  docs,
+  defaultCvDocId,
   gmailConnected,
   sending,
   busyAction,
+  onClose,
   onSaved,
   onRedraft,
   onSend,
@@ -685,11 +736,15 @@ function DraftPanel({
   onSkip,
   onDelete,
   onUpload,
+  onPatch,
 }: {
-  draft: Draft | null
+  draft: Draft
+  docs: DocumentRow[]
+  defaultCvDocId: number | null
   gmailConnected: boolean
   sending: boolean
   busyAction: string | null
+  onClose: () => void
   onSaved: (draft: Draft) => void
   onRedraft: (draft: Draft) => void
   onSend: (draft: Draft) => void
@@ -697,122 +752,242 @@ function DraftPanel({
   onSkip: (draft: Draft) => void
   onDelete: (draft: Draft) => void
   onUpload: (draft: Draft, file: File) => void
+  onPatch: (draft: Draft, patch: { attachment_doc_ids?: number[] | null }) => Promise<void>
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
+  const [addingAttachment, setAddingAttachment] = useState(false)
 
-  if (!draft) {
-    return (
-      <aside className="rounded-md border min-h-[340px] grid place-items-center text-center p-6"
-        style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-        <div>
-          <Mail size={28} className="mx-auto" style={{ color: 'var(--color-brand-600)' }} />
-          <div className="text-[15px] font-semibold mt-3" style={{ color: 'var(--color-ink)' }}>No draft selected</div>
-          <div className="text-[12px] mt-1" style={{ color: 'var(--color-muted)' }}>Select a draft from the queue.</div>
-        </div>
-      </aside>
-    )
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  const resolvedAttachmentIds = draft.attachment_doc_ids ?? []
+  const attachedDocs = resolvedAttachmentIds
+    .map((id) => docs.find((doc) => doc.id === id))
+    .filter(Boolean) as DocumentRow[]
+  const availableDocs = docs.filter((doc) => !resolvedAttachmentIds.includes(doc.id))
+  const defaultCvDoc = defaultCvDocId ? docs.find((doc) => doc.id === defaultCvDocId) : null
+  const attachmentCount = resolvedAttachmentIds.length
+  const canSend = gmailConnected && !!draft.professor_email && !draft.skipped_at
+  const addExistingAttachment = async (docId: number) => {
+    await onPatch(draft, { attachment_doc_ids: [...resolvedAttachmentIds, docId] })
+    setAddingAttachment(false)
+  }
+  const removeAttachment = async (docId: number) => {
+    await onPatch(draft, { attachment_doc_ids: resolvedAttachmentIds.filter((id) => id !== docId) })
+  }
+  const resetToDefaultCv = async () => {
+    await onPatch(draft, { attachment_doc_ids: null })
   }
 
-  const attachmentCount = draft.attachment_doc_ids?.length ?? 0
-  const canSend = gmailConnected && !!draft.professor_email && !draft.skipped_at
-
   return (
-    <aside className="rounded-md border overflow-hidden"
-      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
-      <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
-        <div className="text-[11px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>Selected draft</div>
-        <h2 className="text-[18px] leading-tight font-bold mt-1" style={{ color: 'var(--color-ink)' }}>
-          {draft.professor_name || `Professor #${draft.professor_id}`}
-        </h2>
-        <div className="text-[12px] mt-1" style={{ color: 'var(--color-ink-soft)' }}>
-          {[draft.professor_university, draft.professor_email].filter(Boolean).join(' - ') || 'No recipient metadata'}
-        </div>
-      </div>
-
-      <div className="p-3">
-        <div className="flex items-center gap-2 flex-wrap mb-3">
-          {draft.professor_research_category && <CatPill cat={draft.professor_research_category} />}
-          <SmallBadge label={draft.professor_status || 'drafting'} tone={draft.professor_status === 'drafting' ? 'muted' : 'green'} />
-          {draft.skipped_at && <SmallBadge label="skipped" tone="amber" />}
-          <SmallBadge label={`${wordCount(draft.body)} words`} tone="muted" />
-          <SmallBadge label={`${attachmentCount} attachments`} tone={attachmentCount ? 'green' : 'muted'} />
-        </div>
-
-        <DraftEditor draft={draft} onSaved={onSaved} />
-
-        <div className="mt-3 rounded-md border px-3 py-2"
-          style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
-          <div className="text-[11px] uppercase tracking-[0.08em] mb-2" style={{ color: 'var(--color-muted)' }}>Actions</div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => onRedraft(draft)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium"
-              style={{
-                background: 'color-mix(in srgb, var(--color-cat-cv) 8%, var(--color-white))',
-                borderColor: 'color-mix(in srgb, var(--color-cat-cv) 40%, var(--color-line))',
-                color: 'color-mix(in srgb, var(--color-cat-cv) 70%, var(--color-ink))',
-              }}
-            >
-              <Sparkles size={12} /> Redraft
-            </button>
-            <button
-              onClick={() => onSend(draft)}
-              disabled={!canSend || sending}
-              title={!gmailConnected ? 'Connect Gmail in Settings first' : !draft.professor_email ? 'Professor has no email on file' : draft.skipped_at ? 'Unskip this draft before sending' : 'Send via Gmail now'}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md text-[12px] font-semibold text-white disabled:opacity-50"
-              style={{ background: 'var(--color-ink)' }}
-            >
-              <Send size={12} /> {sending ? 'Sending' : 'Send Gmail'}
-            </button>
-            <button
-              onClick={() => onMarkSent(draft)}
-              disabled={busyAction === `mark-${draft.id}`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
-            >
-              <CheckCircle2 size={12} /> Mark sent
-            </button>
-            <button
-              onClick={() => onSkip(draft)}
-              disabled={busyAction === `skip-${draft.id}`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
-            >
-              <Archive size={12} /> {draft.skipped_at ? 'Unskip' : 'Skip'}
-            </button>
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={busyAction === `upload-${draft.id}`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-              style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-brand-700)' }}
-            >
-              <FileUp size={12} /> Attach
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                e.target.value = ''
-                if (file) onUpload(draft, file)
-              }}
-            />
-            <button
-              onClick={() => onDelete(draft)}
-              disabled={busyAction === `delete-${draft.id}`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
-              style={{ background: 'var(--color-rose-50)', borderColor: 'var(--color-line-strong)', color: 'var(--color-rose-700)' }}
-            >
-              <Trash2 size={12} /> Delete
-            </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Close draft modal"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+        style={{ background: 'rgba(15, 23, 42, 0.36)' }}
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Draft for ${draft.professor_name || `Professor #${draft.professor_id}`}`}
+        className="relative w-full max-w-[920px] max-h-[92vh] overflow-hidden rounded-md border shadow-2xl"
+        style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}
+      >
+        <div className="px-4 py-3 border-b flex items-start gap-3"
+          style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper)' }}>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] uppercase tracking-[0.08em]" style={{ color: 'var(--color-muted)' }}>Selected draft</div>
+            <h2 className="text-[19px] leading-tight font-bold mt-1 truncate">
+              <Link
+                to={`/professors/${draft.professor_id}`}
+                className="inline-block max-w-full truncate hover:underline"
+                style={{ color: 'var(--color-ink)' }}
+                aria-label={`Open profile for ${draft.professor_name || `Professor #${draft.professor_id}`}`}
+              >
+                {draft.professor_name || `Professor #${draft.professor_id}`}
+              </Link>
+            </h2>
+            <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--color-ink-soft)' }}>
+              {[draft.professor_university, draft.professor_email].filter(Boolean).join(' - ') || 'No recipient metadata'}
+            </div>
           </div>
-          <div className="text-[11px] mt-2" style={{ color: 'var(--color-muted)' }}>
-            Created {shortDate(draft.created_at)} - Updated {shortDate(draft.updated_at)}
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 p-1.5 rounded-md border hover:bg-[color:var(--color-paper-2)]"
+            style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-muted)' }}
+            aria-label="Close draft"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(92vh-72px)] overflow-y-auto p-4">
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            {draft.professor_research_category && <CatPill cat={draft.professor_research_category} />}
+            <SmallBadge label={draft.professor_status || 'drafting'} tone={draft.professor_status === 'drafting' ? 'muted' : 'green'} />
+            {draft.skipped_at && <SmallBadge label="skipped" tone="amber" />}
+            <SmallBadge label={`${wordCount(draft.body)} words`} tone="muted" />
+            <SmallBadge label={`${attachmentCount} attachments`} tone={attachmentCount ? 'green' : 'muted'} />
+          </div>
+
+          <DraftEditor draft={draft} onSaved={onSaved} />
+
+          <div className="mt-3 rounded-md border px-3 py-2"
+            style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[11px] uppercase tracking-[0.08em] flex items-center gap-1.5" style={{ color: 'var(--color-muted)' }}>
+                <Paperclip size={12} /> Attachments
+              </div>
+              {draft.attachment_doc_ids !== null && draft.attachment_doc_ids !== undefined && (
+                <button
+                  type="button"
+                  onClick={resetToDefaultCv}
+                  className="text-[11px] underline"
+                  style={{ color: 'var(--color-muted)' }}
+                >
+                  Reset to default CV
+                </button>
+              )}
+            </div>
+            {draft.attachment_doc_ids === null || draft.attachment_doc_ids === undefined ? (
+              <div className="mt-2 rounded-md border px-2.5 py-2 text-[12px]"
+                style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}>
+                {defaultCvDoc
+                  ? <>Using default CV at send time: <strong>{defaultCvDoc.title}</strong></>
+                  : 'No custom attachments. Set a default CV in Profile or add a file below.'}
+              </div>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {attachedDocs.map((doc) => (
+                <span
+                  key={doc.id}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px]"
+                  style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}
+                >
+                  <FileText size={11} style={{ color: 'var(--color-muted)' }} />
+                  <span className="truncate" style={{ color: 'var(--color-ink-soft)' }}>{doc.title}</span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--color-muted-2)' }}>
+                    {formatBytes(doc.size_bytes)}
+                  </span>
+                  <button type="button" onClick={() => removeAttachment(doc.id)} title="Remove attachment" style={{ color: 'var(--color-muted)' }}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              {draft.attachment_doc_ids && attachedDocs.length === 0 && (
+                <span className="text-[12px] italic" style={{ color: 'var(--color-muted-2)' }}>
+                  No files attached.
+                </span>
+              )}
+              {!addingAttachment && availableDocs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAddingAttachment(true)}
+                  className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] font-medium"
+                  style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-brand-700)' }}
+                >
+                  <Paperclip size={11} /> Pick from Documents
+                </button>
+              )}
+              {addingAttachment && (
+                <select
+                  autoFocus
+                  onBlur={() => setAddingAttachment(false)}
+                  onChange={(e) => e.target.value && addExistingAttachment(parseInt(e.target.value))}
+                  className="rounded-md border px-2 py-1 text-[12px]"
+                  style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }}
+                >
+                  <option value="">Pick from Documents</option>
+                  {availableDocs.map((doc) => (
+                    <option key={doc.id} value={doc.id}>[{doc.kind}] {doc.title}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-md border px-3 py-2"
+            style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }}>
+            <div className="text-[11px] uppercase tracking-[0.08em] mb-2" style={{ color: 'var(--color-muted)' }}>Actions</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => onRedraft(draft)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium"
+                style={{
+                  background: 'color-mix(in srgb, var(--color-cat-cv) 8%, var(--color-white))',
+                  borderColor: 'color-mix(in srgb, var(--color-cat-cv) 40%, var(--color-line))',
+                  color: 'color-mix(in srgb, var(--color-cat-cv) 70%, var(--color-ink))',
+                }}
+              >
+                <Sparkles size={12} /> Redraft
+              </button>
+              <button
+                onClick={() => onSend(draft)}
+                disabled={!canSend || sending}
+                title={!gmailConnected ? 'Connect Gmail in Settings first' : !draft.professor_email ? 'Professor has no email on file' : draft.skipped_at ? 'Unskip this draft before sending' : 'Send via Gmail now'}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md text-[12px] font-semibold text-white disabled:opacity-50"
+                style={{ background: 'var(--color-ink)' }}
+              >
+                <Send size={12} /> {sending ? 'Sending' : 'Send Gmail'}
+              </button>
+              <button
+                onClick={() => onMarkSent(draft)}
+                disabled={busyAction === `mark-${draft.id}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
+                style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
+              >
+                <CheckCircle2 size={12} /> Mark sent
+              </button>
+              <button
+                onClick={() => onSkip(draft)}
+                disabled={busyAction === `skip-${draft.id}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
+                style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
+              >
+                <Archive size={12} /> {draft.skipped_at ? 'Unskip' : 'Skip'}
+              </button>
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={busyAction === `upload-${draft.id}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
+                style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-brand-700)' }}
+              >
+                <FileUp size={12} /> Attach
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) onUpload(draft, file)
+                }}
+              />
+              <button
+                onClick={() => onDelete(draft)}
+                disabled={busyAction === `delete-${draft.id}`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-md border text-[12px] font-medium disabled:opacity-60"
+                style={{ background: 'var(--color-rose-50)', borderColor: 'var(--color-line-strong)', color: 'var(--color-rose-700)' }}
+              >
+                <Trash2 size={12} /> Delete
+              </button>
+            </div>
+            <div className="text-[11px] mt-2" style={{ color: 'var(--color-muted)' }}>
+              Created {shortDate(draft.created_at)} - Updated {shortDate(draft.updated_at)}
+            </div>
           </div>
         </div>
-      </div>
-    </aside>
+      </section>
+    </div>
   )
 }
 
@@ -1033,4 +1208,11 @@ function shortDate(value?: string | null) {
 
 function wordCount(value?: string | null) {
   return (value || '').trim().split(/\s+/).filter(Boolean).length
+}
+
+function formatBytes(bytes?: number | null) {
+  const value = bytes || 0
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)}MB`
+  if (value >= 1024) return `${Math.round(value / 1024)}kB`
+  return `${value}B`
 }

@@ -738,11 +738,8 @@ function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
               durationMs: evt.data.duration_ms,
             },
           }
-        case 'error': {
-          const stderr = (evt.data.stderr || '').trim()
-          const tail = stderr ? stderr.split('\n').slice(-3).join('\n') : ''
-          return { ...m, done: true, error: tail ? `${evt.data.message}\n${tail}` : evt.data.message }
-        }
+        case 'error':
+          return { ...m, done: true, error: evt.data.message || 'AI run failed' }
       }
       return m
     })

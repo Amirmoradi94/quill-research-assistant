@@ -564,7 +564,7 @@ export const api = {
       run_id: number; professor_id: number; professor_name: string; provider: string
     }> }>('/api/draft-generation', { method: 'POST', body: JSON.stringify(payload) }),
   draft: (id: number) => request<Draft>(`/api/drafts/${id}`),
-  patchDraft: (id: number, patch: { subject?: string; body?: string }) =>
+  patchDraft: (id: number, patch: { subject?: string; body?: string; attachment_doc_ids?: number[] | null }) =>
     request<Draft>(`/api/drafts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteDraft: (id: number) =>
     fetch(apiUrl(`/api/drafts/${id}`), { method: 'DELETE' }).then((r) => {

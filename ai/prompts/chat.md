@@ -4,14 +4,14 @@ research position search dashboard. Be concise and direct.
 
 ## How to query the dashboard API
 
-Base URL: http://127.0.0.1:8000
+Base URL: {{ api_base }}
 
 **IMPORTANT: Always use Python urllib — never curl or wget. Shell HTTP commands are rewritten by a proxy that garbles the output.**
 
 ```python
 python3 -c "
 import urllib.request, json
-data = json.loads(urllib.request.urlopen('http://127.0.0.1:8000/api/professors').read())
+data = json.loads(urllib.request.urlopen('{{ api_base }}/api/professors').read())
 print(json.dumps(data, indent=2))
 "
 ```
@@ -111,7 +111,7 @@ Example create:
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/calendar/events',
+    '{{ api_base }}/api/calendar/events',
     data=json.dumps({'title': 'NSF deadline', 'date': '2026-06-15', 'kind': 'deadline'}).encode(),
     headers={'Content-Type': 'application/json'},
     method='POST'
@@ -136,7 +136,7 @@ You can also **trigger AI workflows** via POST /api/ai/run/background. This star
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/ai/run/background',
+    '{{ api_base }}/api/ai/run/background',
     data=json.dumps({
         'workflow': 'discover_professors',
         'params': {
@@ -173,7 +173,7 @@ missing, so you'll get a clear error instead of a silent dud.
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/ai/run/background',
+    '{{ api_base }}/api/ai/run/background',
     data=json.dumps({
         'workflow': 'research_professor',
         'professor_id': 80,
@@ -193,7 +193,7 @@ print(json.dumps({'id': run['id'], 'status': run['status']}, indent=2))
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/ai/run/background',
+    '{{ api_base }}/api/ai/run/background',
     data=json.dumps({
         'workflow': 'draft_email',
         'professor_id': 80,
@@ -217,7 +217,7 @@ print(json.dumps({'id': run['id'], 'status': run['status']}, indent=2))
 python3 -c "
 import urllib.request, json
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/user',
+    '{{ api_base }}/api/user',
     data=json.dumps({'linkedin': 'https://www.linkedin.com/in/amirmoradi94/'}).encode(),
     headers={'Content-Type': 'application/json'},
     method='PATCH'
@@ -229,7 +229,7 @@ print(json.loads(urllib.request.urlopen(req).read())['linkedin'])
 When the user manually corrects an auto-filled field, also lock it:
 ```python
 urllib.request.urlopen(urllib.request.Request(
-    'http://127.0.0.1:8000/api/user/field/linkedin/verify', method='POST')).read()
+    '{{ api_base }}/api/user/field/linkedin/verify', method='POST')).read()
 ```
 
 ### Add an item to a profile child collection
@@ -237,7 +237,7 @@ urllib.request.urlopen(urllib.request.Request(
 ```python
 # Add an award
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/user/awards',
+    '{{ api_base }}/api/user/awards',
     data=json.dumps({'name':'NSERC Postdoctoral Fellowship','granting_body':'NSERC',
                      'amount':70000,'currency':'CAD','year':2026,'type':'fellowship'}).encode(),
     headers={'Content-Type': 'application/json'}, method='POST')
@@ -295,13 +295,13 @@ array of strings), `tech_used` (JSON array of strings).
 
 ```python
 # 1. Fetch the current draft text
-d = json.loads(urllib.request.urlopen('http://127.0.0.1:8000/api/drafts/42').read())
+d = json.loads(urllib.request.urlopen('{{ api_base }}/api/drafts/42').read())
 new_body = d['body'].replace(
     'I have completed my Ph.D.',
     'I am completing my Ph.D.')
 # 2. PATCH back
 req = urllib.request.Request(
-    f'http://127.0.0.1:8000/api/drafts/42',
+    f'{{ api_base }}/api/drafts/42',
     data=json.dumps({'body': new_body}).encode(),
     headers={'Content-Type': 'application/json'}, method='PATCH')
 urllib.request.urlopen(req).read()
@@ -322,7 +322,7 @@ Always use a single GET with query params if possible, then filter in Python:
 
 ```python
 profs = json.loads(urllib.request.urlopen(
-    'http://127.0.0.1:8000/api/professors?tier=T1&category=cv').read())
+    '{{ api_base }}/api/professors?tier=T1&category=cv').read())
 hits = [p for p in profs if p['university'] in ('MIT','Stanford University')
         and p['status'] == 'drafting']
 for p in hits:
@@ -335,7 +335,7 @@ page like `[Prof. Doe](/professors/12)` so the user can click through.
 ### Filter and show drafts
 
 ```python
-drafts = json.loads(urllib.request.urlopen('http://127.0.0.1:8000/api/drafts').read())
+drafts = json.loads(urllib.request.urlopen('{{ api_base }}/api/drafts').read())
 # Only drafts whose subject mentions "perception"
 hits = [d for d in drafts if 'perception' in d['subject'].lower()]
 ```
@@ -345,7 +345,7 @@ hits = [d for d in drafts if 'perception' in d['subject'].lower()]
 ```python
 # Quick send
 req = urllib.request.Request(
-    'http://127.0.0.1:8000/api/drafts/42/send', method='POST')
+    '{{ api_base }}/api/drafts/42/send', method='POST')
 try:
     r = json.loads(urllib.request.urlopen(req).read())
     print(f"Sent to {r['to']} at {r['sent_at']}")
@@ -369,11 +369,11 @@ Rules for sending:
 The user might say "mark everyone at McGill as Tier 2" — that's a loop:
 
 ```python
-profs = json.loads(urllib.request.urlopen('http://127.0.0.1:8000/api/professors').read())
+profs = json.loads(urllib.request.urlopen('{{ api_base }}/api/professors').read())
 for p in profs:
     if p['university'] == 'McGill University':
         urllib.request.urlopen(urllib.request.Request(
-            f'http://127.0.0.1:8000/api/professors/{p["id"]}',
+            f'{{ api_base }}/api/professors/{p["id"]}',
             data=json.dumps({'tier':'T2'}).encode(),
             headers={'Content-Type':'application/json'}, method='PATCH')).read()
 ```

@@ -10,12 +10,14 @@ import {
   Search,
   Sparkles,
   Target,
+  Trash2,
   Users,
   X,
 } from 'lucide-react'
 import { api, type Professor } from '@/lib/api'
 import { apiUrl } from '@/lib/runtime'
 import { formatCategory } from '@/lib/categories'
+import { useConfirm } from '@/components/ConfirmDialog'
 
 type SortKey = 'number' | 'name' | 'university' | 'dept_lab' | 'research_category' | 'tier' | 'status' | 'email' | 'score'
 type IconComponent = ComponentType<{ size?: number; className?: string; style?: CSSProperties }>
@@ -24,6 +26,7 @@ const STATUS_OPTIONS = ['drafting', 'sent', 'no_reply', 'replied', 'interview', 
 
 export function Professors() {
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const [profs, setProfs] = useState<Professor[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [q, setQ] = useState('')
@@ -92,7 +95,7 @@ export function Professors() {
     const dir = sortDir === 'asc' ? 1 : -1
     const get = (p: Professor): string | number => {
       if (sortKey === 'number') return (p.number ?? p.id) as number
-      if (sortKey === 'score') return p.match_score ?? p.relevance_score ?? -1
+      if (sortKey === 'score') return p.relevance_score ?? p.match_score ?? -1
       const v = p[sortKey as keyof Professor]
       return (v as string | number | null | undefined) ?? ''
     }
@@ -105,6 +108,7 @@ export function Professors() {
   }, [profs, tier, university, sortKey, sortDir])
 
   const visibleIds = useMemo(() => visible.map((p) => p.id), [visible])
+  const checkedProfessors = useMemo(() => profs.filter((p) => checkedIds.has(p.id)), [profs, checkedIds])
   const checkedVisibleCount = visibleIds.filter((id) => checkedIds.has(id)).length
   const allVisibleChecked = visibleIds.length > 0 && checkedVisibleCount === visibleIds.length
 
@@ -210,6 +214,36 @@ export function Professors() {
           ? { ...p, relevance_score: result.relevance_score, relevance_breakdown: result.relevance_breakdown, relevance_scored_at: new Date().toISOString() }
           : p
       }))
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const bulkDelete = async () => {
+    const ids = [...checkedIds]
+    if (ids.length === 0) return
+
+    const previewNames = checkedProfessors.map((p) => p.name).slice(0, 3)
+    const detail = `${previewNames.join(', ')}${checkedProfessors.length > previewNames.length ? `, +${checkedProfessors.length - previewNames.length} more` : ''}`
+    const ok = await confirm({
+      title: ids.length === 1 ? 'Delete selected professor?' : `Delete ${ids.length} selected professors?`,
+      detail,
+      message: 'This removes the selected professor records and related local drafts, papers, and activity from Quill. This cannot be undone.',
+      confirmLabel: ids.length === 1 ? 'Delete professor' : 'Delete selected',
+      cancelLabel: 'Cancel',
+      variant: 'danger',
+    })
+    if (!ok) return
+
+    setBusyAction('bulk-delete')
+    try {
+      await Promise.all(ids.map((id) => api.deleteProfessor(id)))
+      const removed = new Set(ids)
+      setProfs((rows) => rows.filter((p) => !removed.has(p.id)))
+      setCheckedIds(new Set())
+      setErr(null)
     } catch (e) {
       setErr(String(e))
     } finally {
@@ -341,9 +375,10 @@ export function Professors() {
             {checkedIds.size > 0 && (
               <BulkToolbar
                 count={checkedIds.size}
-                busy={busyAction === 'bulk-status' || busyAction === 'bulk-score'}
+                busy={busyAction === 'bulk-status' || busyAction === 'bulk-score' || busyAction === 'bulk-delete'}
                 onStatus={bulkPatchStatus}
                 onScore={bulkScore}
+                onDelete={bulkDelete}
                 onClear={() => setCheckedIds(new Set())}
               />
             )}
@@ -546,11 +581,12 @@ function FilterBar({
   )
 }
 
-function BulkToolbar({ count, busy, onStatus, onScore, onClear }: {
+function BulkToolbar({ count, busy, onStatus, onScore, onDelete, onClear }: {
   count: number
   busy: boolean
   onStatus: (status: string) => void
   onScore: () => void
+  onDelete: () => void
   onClear: () => void
 }) {
   return (
@@ -567,6 +603,15 @@ function BulkToolbar({ count, busy, onStatus, onScore, onClear }: {
       >
         <RefreshCw size={12} className={busy ? 'animate-spin' : ''} />
         Score selected
+      </button>
+      <button
+        onClick={onDelete}
+        disabled={busy}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-medium disabled:opacity-60"
+        style={{ background: 'var(--color-white)', borderColor: 'var(--color-rose-200)', color: 'var(--color-rose-700)' }}
+      >
+        <Trash2 size={12} />
+        Delete selected
       </button>
       <select
         onChange={(e) => {
@@ -828,7 +873,7 @@ function MutedDash() {
 }
 
 function scoreFor(p: Professor): number | null {
-  const raw = p.match_score ?? p.relevance_score
+  const raw = p.relevance_score ?? p.match_score
   if (raw === null || raw === undefined || Number.isNaN(Number(raw))) return null
   return Math.round(Number(raw))
 }

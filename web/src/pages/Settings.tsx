@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, WifiOff, RefreshCw, Mail, AlertCircle, Inbox, HardDrive, Download, LogIn, ShieldCheck, Bell } from 'lucide-react'
 import { api, type DesktopStatus, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
 import { sendTestNotification } from '@/lib/desktopNotifications'
+import { useConfirm } from '@/components/ConfirmDialog'
 
 type SettingsT = {
   ai_provider: string
@@ -56,6 +57,7 @@ export function Settings() {
   const [setupMessage, setSetupMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [notificationMessage, setNotificationMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const confirmSetup = useConfirm()
 
   const loadProviders = () => {
     setProvidersLoading(true)
@@ -99,11 +101,15 @@ export function Settings() {
   const runProviderSetup = async (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') => {
     const item = setup?.providers[provider]
     const label = item?.label || (provider === 'claude_cli' ? 'Claude Code' : 'Codex')
-    const title = action === 'install' ? `Install ${label}?` : `Sign in to ${label}?`
-    const detail = action === 'install'
-      ? `Quill will open Terminal and run the official ${label} installer. Continue?`
-      : `Quill will open Terminal and start the official ${label} browser login flow. Continue?`
-    if (!confirm(`${title}\n\n${detail}`)) return
+    const ok = await confirmSetup({
+      title: action === 'install' ? `Install ${label}?` : `Sign in to ${label}?`,
+      message: action === 'install'
+        ? `Quill will open Terminal and run the official ${label} installer.`
+        : `Quill will open Terminal and start the official ${label} browser login flow.`,
+      variant: 'primary',
+      confirmLabel: action === 'install' ? 'Install' : 'Sign in',
+    })
+    if (!ok) return
 
     const key = `${provider}:${action}`
     setSetupBusy(key)

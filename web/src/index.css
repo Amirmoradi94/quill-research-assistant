@@ -1,5 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @source "./**/*.{ts,tsx,html}";
 
 /* ─────────────────────────────────────────────────────────────────
@@ -237,6 +237,33 @@ input[type="reset"]:not(:disabled) {
 .quill-click-feedback {
   animation: quillClickFeedback 180ms var(--ease-quill);
 }
+
+/* Desktop readability bump: one visual step larger in the app body and
+   Quill rail. Layout scopes this away from the left navigation. */
+.quill-type-scale .text-\[9px\] { font-size: 10px; }
+.quill-type-scale .text-\[10px\] { font-size: 11px; }
+.quill-type-scale .text-\[11px\] { font-size: 12px; }
+.quill-type-scale .text-\[12px\],
+.quill-type-scale .text-xs { font-size: 13px; }
+.quill-type-scale .text-\[13px\] { font-size: 14px; }
+.quill-type-scale .text-\[14px\] { font-size: 15px; }
+.quill-type-scale .text-sm { font-size: 15px; }
+.quill-type-scale .text-\[14\.5px\] { font-size: 15.5px; }
+.quill-type-scale .text-\[15px\] { font-size: 16px; }
+.quill-type-scale .text-\[16px\],
+.quill-type-scale .text-base { font-size: 17px; }
+.quill-type-scale .text-\[18px\],
+.quill-type-scale .text-lg { font-size: 19px; }
+.quill-type-scale .text-xl { font-size: 21px; }
+.quill-type-scale .text-\[24px\],
+.quill-type-scale .text-2xl { font-size: 25px; }
+.quill-type-scale .text-\[28px\] { font-size: 29px; }
+
+/* Page titles keep their designed scale. */
+.quill-type-scale h1.text-\[28px\] { font-size: 28px; }
+.quill-type-scale h1.text-\[30px\] { font-size: 30px; }
+.quill-type-scale h1.text-\[31px\] { font-size: 31px; }
+.quill-type-scale h1.text-\[32px\] { font-size: 32px; }
 
 @media (prefers-reduced-motion: reduce) {
   .q-cursor::after { animation: none; opacity: 0; }

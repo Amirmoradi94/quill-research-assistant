@@ -1324,7 +1324,7 @@ export function Discover() {
             <h1 className="text-[31px] leading-none font-bold tracking-tight mt-1" style={{ color: 'var(--color-ink)' }}>
               Discover candidates
             </h1>
-            <p className="text-[13px] mt-1 max-w-full sm:max-w-[540px] leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
+            <p className="text-[13px] mt-1 max-w-full sm:max-w-none sm:whitespace-nowrap leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
               Search, score, and triage new professors before moving them into the application pipeline.
             </p>
           </div>

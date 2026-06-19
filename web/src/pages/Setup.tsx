@@ -16,6 +16,7 @@ import {
   User,
 } from 'lucide-react'
 import { api, type AiProvidersStatus, type DesktopStatus, type DocumentRow, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
+import { useConfirm } from '@/components/ConfirmDialog'
 
 type LoadState = {
   desktop: DesktopStatus | null
@@ -45,6 +46,7 @@ export function Setup() {
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+  const confirmSetup = useConfirm()
 
   const load = async () => {
     setLoading(true)
@@ -119,10 +121,15 @@ export function Setup() {
   const runProviderSetup = async (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') => {
     const item = state.setup?.providers[provider]
     const label = item?.label || (provider === 'claude_cli' ? 'Claude Code' : 'Codex')
-    const detail = action === 'install'
-      ? `Quill will open Terminal and run the official ${label} installer.`
-      : `Quill will open Terminal and start the official ${label} browser login.`
-    if (!confirm(`${action === 'install' ? 'Install' : 'Sign in to'} ${label}?\n\n${detail}`)) return
+    const ok = await confirmSetup({
+      title: action === 'install' ? `Install ${label}?` : `Sign in to ${label}?`,
+      message: action === 'install'
+        ? `Quill will open Terminal and run the official ${label} installer.`
+        : `Quill will open Terminal and start the official ${label} browser login.`,
+      variant: 'primary',
+      confirmLabel: action === 'install' ? 'Install' : 'Sign in',
+    })
+    if (!ok) return
 
     const key = `${provider}:${action}`
     setSetupBusy(key)
@@ -347,6 +354,13 @@ export function Setup() {
             >
               Open dashboard
             </button>
+            <Link
+              to="/professors"
+              className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border px-3 text-[13px] font-medium"
+              style={{ borderColor: 'var(--color-line)', color: 'var(--color-ink)' }}
+            >
+              Browse app
+            </Link>
             <Link
               to="/settings"
               className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-md border px-3 text-[13px] font-medium"

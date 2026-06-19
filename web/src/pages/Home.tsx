@@ -51,10 +51,6 @@ function shortDate(value?: string | null) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function fulfilled<T>(result: PromiseSettledResult<T>) {
-  return result.status === 'fulfilled' ? result.value : null
-}
-
 function formatStatusLabel(status: string) {
   return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

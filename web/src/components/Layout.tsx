@@ -114,10 +114,10 @@ export function Layout() {
         <div className="hidden lg:block min-h-0 overflow-hidden">
           <Sidebar user={user} />
         </div>
-        <main className="overflow-y-auto min-h-0 min-w-0" style={{ background: 'var(--color-paper)' }}>
+        <main className="quill-type-scale overflow-y-auto min-h-0 min-w-0" style={{ background: 'var(--color-paper)' }}>
           <Outlet />
         </main>
-        <div className="relative hidden h-screen min-h-0 overflow-hidden xl:block">
+        <div className="quill-type-scale relative hidden h-screen min-h-0 overflow-hidden xl:block">
           <div
             role="separator"
             aria-orientation="vertical"
