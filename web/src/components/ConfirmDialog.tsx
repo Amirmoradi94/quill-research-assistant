@@ -55,8 +55,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const variant = opts.variant ?? 'danger'
   const confirmBg =
     variant === 'danger'
-      ? 'linear-gradient(135deg, var(--color-rose-500), var(--color-rose-700))'
-      : 'linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))'
+      ? '#be123c'
+      : '#264ba8'
 
   return (
     <ConfirmCtx.Provider value={confirm}>
@@ -110,12 +110,18 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
                 {opts.cancelLabel || 'Cancel'}
               </button>
               <button onClick={() => close(true)}
-                className="px-4 py-2 rounded-lg text-[13px] font-medium text-white transition-transform hover:-translate-y-0.5"
+                className="px-4 py-2 rounded-lg text-[13px] font-semibold transition-transform hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
                 style={{
                   background: confirmBg,
+                  color: '#ffffff',
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  textShadow: '0 1px 1px rgba(0,0,0,0.18)',
+                  opacity: 1,
+                  cursor: 'pointer',
+                  outlineColor: variant === 'danger' ? '#fecdd3' : '#bfdbfe',
                   boxShadow: variant === 'danger'
-                    ? '0 6px 16px -6px rgba(244,63,94,0.45)'
-                    : '0 6px 16px -6px rgba(47,92,203,0.45)',
+                    ? '0 8px 18px -8px rgba(190,18,60,0.55)'
+                    : '0 8px 18px -8px rgba(38,75,168,0.55)',
                 }}>
                 {opts.confirmLabel || (variant === 'danger' ? 'Delete' : 'Confirm')}
               </button>
