@@ -20,12 +20,6 @@ jobs:
           - name: macOS Apple Silicon
             os: macos-14
             updaterTarget: darwin-aarch64
-          - name: macOS Intel
-            os: macos-13
-            updaterTarget: darwin-x86_64
-          - name: Linux
-            os: ubuntu-24.04
-            updaterTarget: linux-x86_64
 
     steps:
       - name: Checkout
