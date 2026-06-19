@@ -17,7 +17,7 @@ if (!repo || !tag) {
 const artifactRoot = resolve(process.cwd(), artifactRootArg)
 const output = resolve(process.cwd(), outputArg)
 const version = tag.replace(/^v/, '')
-const requiredTargets = ['darwin-aarch64']
+const requiredTargets = ['darwin-aarch64', 'linux-x86_64']
 const platforms = {}
 
 for (const file of walk(artifactRoot)) {
