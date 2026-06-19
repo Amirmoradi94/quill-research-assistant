@@ -59,6 +59,8 @@ FALLBACK_CHAIN: tuple[Provider, ...] = (
     Provider.OPENAI_API,
 )
 
+CLAUDE_NONINTERACTIVE_PERMISSION_ARGS = ["--permission-mode", "bypassPermissions"]
+
 
 def resolve_cli_path(command: str, configured_path: str | None = None) -> str | None:
     """Find a provider CLI even when the desktop app has a minimal PATH."""
@@ -237,7 +239,15 @@ def claude_cli_argv(
     max_turns: int,
     cli_path: str | None,
 ) -> list[str]:
-    argv = [resolve_cli_path("claude", cli_path) or "claude", "--print", prompt, "--output-format", "stream-json", "--verbose"]
+    argv = [
+        resolve_cli_path("claude", cli_path) or "claude",
+        *CLAUDE_NONINTERACTIVE_PERMISSION_ARGS,
+        "--print",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
     if allowed_tools:
         argv += ["--allowed-tools", ",".join(allowed_tools)]
     if max_turns:

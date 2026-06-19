@@ -156,7 +156,7 @@ def extract_profile(request: Request, db: Session = Depends(get_db)):
             workflow="extract_user_profile_full",
             params={},  # context is assembled in quill.py from cv_doc_id etc.
             document_id=u.cv_doc_id,
-            timeout_s=420,
+            timeout_s=720,
         ),
         request,
         db,

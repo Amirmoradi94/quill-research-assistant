@@ -711,24 +711,38 @@ export const api = {
   reorderUserItems: (kind: 'education' | 'publications' | 'experience' | 'awards' | 'references', order: number[]) =>
     request<{ ok: boolean; count: number }>(`/api/user/${kind}/reorder`, { method: 'POST', body: JSON.stringify(order) }),
   extractUserProfile: async (onEvent: (evt: string, data: any) => void) => {
-    const r = await fetch(apiUrl('/api/user/extract'), { method: 'POST' })
+    const r = await fetch(apiUrl('/api/user/extract'), {
+      method: 'POST',
+      headers: { 'Accept': 'text/event-stream' },
+    })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
-    const reader = r.body!.getReader()
-    const decoder = new TextDecoder()
+    if (!r.body) throw new Error('Profile extraction failed: no response stream')
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()
     let buf = ''
-    let lastEvt = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += decoder.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('event:')) lastEvt = line.slice(6).trim()
-        else if (line.startsWith('data:')) {
-          try { onEvent(lastEvt, JSON.parse(line.slice(5).trim() || '{}')) } catch { /* ignore */ }
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += value
+        let idx
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, idx)
+          buf = buf.slice(idx + 2)
+          let evt = ''
+          const dataLines: string[] = []
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) evt = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+          }
+          if (!evt) continue
+          try { onEvent(evt, JSON.parse(dataLines.join('\n') || '{}')) } catch { /* ignore malformed SSE frames */ }
         }
       }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(`Profile extraction stream disconnected: ${message}`)
+    } finally {
+      try { reader.releaseLock() } catch {}
     }
   },
   scoreProfessor: (id: number) =>

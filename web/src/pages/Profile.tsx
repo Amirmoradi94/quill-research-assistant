@@ -959,7 +959,7 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
       })
       await onDone()
     } catch (e: any) {
-      setLog((l) => [...l, `\n${e}`])
+      setLog((l) => [...l, `\n${e?.message || e}`])
     } finally { setBusy(false) }
   }
 
@@ -1024,12 +1024,15 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
             </div>
           </div>
 
-          <button onClick={run} disabled={busy || !data.cv_doc_id}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[14px] disabled:opacity-50 transition-transform hover:-translate-y-0.5"
+          <button type="button" onClick={run} disabled={busy || !data.cv_doc_id}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border font-medium text-[14px] transition-transform enabled:hover:-translate-y-0.5 disabled:cursor-not-allowed"
             style={{
-              background: busy ? 'var(--color-paper-2)' : 'linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))',
-              color: busy ? 'var(--color-muted)' : 'white',
-              boxShadow: busy ? undefined : '0 6px 16px -6px rgba(47,92,203,0.5)',
+              background: busy || !data.cv_doc_id
+                ? 'var(--color-paper-2)'
+                : 'linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))',
+              borderColor: busy || !data.cv_doc_id ? 'var(--color-line-strong)' : 'var(--color-brand-700)',
+              color: busy || !data.cv_doc_id ? 'var(--color-ink-soft)' : 'white',
+              boxShadow: busy || !data.cv_doc_id ? 'inset 0 0 0 1px rgba(28,34,48,0.04)' : '0 6px 16px -6px rgba(47,92,203,0.5)',
             }}>
             {busy ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
             {busy ? 'Extracting…' : 'Run extraction'}

@@ -23,7 +23,7 @@ from typing import Optional
 import httpx
 
 from ai.cli import cli_child_env
-from ai.runner import resolve_cli_path
+from ai.runner import CLAUDE_NONINTERACTIVE_PERMISSION_ARGS, resolve_cli_path
 
 from . import models
 
@@ -125,7 +125,7 @@ async def _clean_via_claude_cli(prompt: str, cli_path: str | None) -> Optional[s
     binary = resolve_cli_path("claude", cli_path)
     if not binary:
         return None
-    return await _run_subprocess([binary, "--print", prompt])
+    return await _run_subprocess([binary, *CLAUDE_NONINTERACTIVE_PERMISSION_ARGS, "--print", prompt])
 
 
 async def _clean_via_codex_cli(prompt: str, cli_path: str | None) -> Optional[str]:

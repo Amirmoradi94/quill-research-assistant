@@ -1524,7 +1524,7 @@ def _prepare_ai_run(
     params = {**base_ctx, **req.params}
 
     max_turns = max(1, min(req.max_turns, 30))
-    timeout_cap = 900 if workflow == Workflow.DISCOVER_PROFESSORS else 300
+    timeout_cap = 900 if workflow in {Workflow.DISCOVER_PROFESSORS, Workflow.EXTRACT_USER_PROFILE_FULL} else 300
     timeout_s = max(10, min(req.timeout_s, timeout_cap))
     run_request = RunRequest(
         workflow=workflow,
