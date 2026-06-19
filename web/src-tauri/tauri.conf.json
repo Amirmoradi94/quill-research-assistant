@@ -24,6 +24,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/icon.png"
@@ -32,5 +33,16 @@
       "binaries/postdoc-backend",
       "binaries/postdoc-scraper"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI2MzY0ODdCNzE0REFEQTUKUldTbHJVMXhlMGcySnRFTThQQnNoY0sxZldqdWpLU1hrNEE5elZrR2R6MDFUU1dtQ2prUi81cG4K",
+      "endpoints": [
+        "https://github.com/Amirmoradi94/quill-research-assistant/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

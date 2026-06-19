@@ -19,12 +19,16 @@ jobs:
         platform:
           - name: macOS Apple Silicon
             os: macos-14
+            updaterTarget: darwin-aarch64
           - name: macOS Intel
             os: macos-13
+            updaterTarget: darwin-x86_64
           - name: Windows
             os: windows-latest
+            updaterTarget: windows-x86_64
           - name: Linux
             os: ubuntu-24.04
+            updaterTarget: linux-x86_64
 
     steps:
       - name: Checkout
@@ -58,13 +62,32 @@ jobs:
       - name: Build backend sidecar
         run: scripts/build_backend_sidecar.sh
 
+      - name: Verify updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is required for tagged desktop releases with auto-update support." >&2
+            exit 1
+          fi
+
       - name: Build desktop package
         run: npm run desktop:build
         working-directory: web
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Repair and verify macOS DMG
         if: runner.os == 'macOS'
         run: scripts/fix_macos_release_package.sh
+
+      - name: Prepare updater artifact
+        run: node scripts/prepare_updater_artifacts.mjs ${{ matrix.platform.updaterTarget }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
@@ -77,6 +100,7 @@ jobs:
             web/src-tauri/target/release/bundle/**/*.exe
             web/src-tauri/target/release/bundle/**/*.AppImage
             web/src-tauri/target/release/bundle/**/*.deb
+            web/src-tauri/target/release/bundle/updater/**/*
           if-no-files-found: warn
 
       - name: Publish GitHub Release assets
@@ -85,7 +109,7 @@ jobs:
         with:
           name: Quill Research Assistant ${{ github.ref_name }}
           draft: false
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
           files: |
             web/src-tauri/target/release/bundle/**/*.dmg
@@ -93,3 +117,30 @@ jobs:
             web/src-tauri/target/release/bundle/**/*.exe
             web/src-tauri/target/release/bundle/**/*.AppImage
             web/src-tauri/target/release/bundle/**/*.deb
+            web/src-tauri/target/release/bundle/updater/**/*
+
+  publish-updater-json:
+    name: Publish updater manifest
+    runs-on: ubuntu-24.04
+    needs: build-desktop
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: quill-research-assistant-*
+
+      - name: Create latest.json
+        run: node scripts/create_latest_json.mjs release-artifacts latest.json "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}"
+
+      - name: Publish latest.json
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: latest.json

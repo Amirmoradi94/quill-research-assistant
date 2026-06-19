@@ -3,6 +3,7 @@ import { useEffect, useState, type CSSProperties, type PointerEvent as ReactPoin
 import { Sidebar } from './Sidebar'
 import { QuillRail } from './QuillRail'
 import { ConfirmProvider } from './ConfirmDialog'
+import { AppUpdateNotice } from './AppUpdateNotice'
 import { api, type UserProfile } from '@/lib/api'
 import { startReminderNotifications } from '@/lib/desktopNotifications'
 
@@ -134,6 +135,7 @@ export function Layout() {
           <QuillRail />
         </div>
       </div>
+      <AppUpdateNotice />
     </ConfirmProvider>
   )
 }

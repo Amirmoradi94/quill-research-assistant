@@ -3,6 +3,15 @@ import { Save, KeyRound, SlidersHorizontal, CheckCircle2, User, Terminal, Wifi, 
 import { api, type DesktopStatus, type ProviderSetupStatus, type UserProfile } from '@/lib/api'
 import { sendTestNotification } from '@/lib/desktopNotifications'
 import { useConfirm } from '@/components/ConfirmDialog'
+import {
+  checkForAppUpdate,
+  formatUpdateProgress,
+  formatUpdateVersion,
+  installAppUpdate,
+  isTauriRuntime,
+  type AppUpdate,
+  type UpdateProgress,
+} from '@/lib/appUpdater'
 
 type SettingsT = {
   ai_provider: string
@@ -186,6 +195,8 @@ export function Settings() {
         </div>
       </Section>
 
+      <AppUpdatesSection />
+
       {/* User Profile */}
       {profile !== null && (
         <Section icon={<User size={16} />} title="Your Profile"
@@ -360,6 +371,113 @@ export function Settings() {
 }
 
 // ─────────── helpers ───────────
+function AppUpdatesSection() {
+  const confirm = useConfirm()
+  const [update, setUpdate] = useState<AppUpdate | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  const [progress, setProgress] = useState<UpdateProgress | null>(null)
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const check = async () => {
+    setChecking(true)
+    setMessage(null)
+    setUpdate(null)
+    setProgress(null)
+    try {
+      if (!isTauriRuntime()) {
+        setMessage({ ok: true, text: 'Desktop updater is available in the installed Quill AI app.' })
+        return
+      }
+      const next = await checkForAppUpdate()
+      if (next) {
+        setUpdate(next)
+        setMessage({ ok: true, text: `Quill AI ${formatUpdateVersion(next)} is ready to install.` })
+      } else {
+        setMessage({ ok: true, text: 'Quill AI is up to date.' })
+      }
+    } catch (e: any) {
+      setMessage({ ok: false, text: e?.message || String(e) })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const install = async () => {
+    if (!update) return
+    const version = formatUpdateVersion(update)
+    const ok = await confirm({
+      title: `Install Quill AI ${version}?`,
+      message: 'The signed update will be downloaded and installed. Quill will relaunch after installation.',
+      variant: 'primary',
+      confirmLabel: 'Install update',
+    })
+    if (!ok) return
+
+    setInstalling(true)
+    setMessage({ ok: true, text: 'Starting update download...' })
+    try {
+      await installAppUpdate(update, (next) => {
+        setProgress(next)
+        setMessage({ ok: true, text: formatUpdateProgress(next) })
+      })
+    } catch (e: any) {
+      setMessage({ ok: false, text: e?.message || String(e) })
+      setInstalling(false)
+    }
+  }
+
+  return (
+    <Section icon={<Download size={16} />} title="App updates"
+      desc="Quill checks GitHub releases for signed desktop updates. Updates are verified before installation.">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={check}
+          disabled={checking || installing}
+          className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-medium disabled:opacity-60"
+          style={{
+            background: 'var(--color-paper-2)',
+            borderColor: 'var(--color-line)',
+            color: 'var(--color-ink)',
+          }}
+        >
+          <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+          Check for updates
+        </button>
+        {update && (
+          <button
+            onClick={install}
+            disabled={installing}
+            className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-[13px] font-medium disabled:opacity-60"
+            style={{ background: 'var(--color-brand-600)', color: '#fff' }}
+          >
+            <Download size={14} />
+            {installing ? 'Installing...' : `Install ${formatUpdateVersion(update)}`}
+          </button>
+        )}
+        {message && (
+          <span className="inline-flex items-center gap-1.5 text-[13px]"
+            style={{ color: message.ok ? 'var(--color-green-700)' : 'var(--color-rose-700)' }}>
+            {message.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+            {message.text}
+          </span>
+        )}
+      </div>
+      {progress?.totalBytes ? (
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full" style={{ background: 'var(--color-paper-2)' }}>
+          <div
+            className="h-full transition-all"
+            style={{
+              width: `${Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))}%`,
+              background: 'var(--color-brand-600)',
+            }}
+          />
+        </div>
+      ) : null}
+    </Section>
+  )
+}
+
 function Section({ icon, title, desc, children }: {
   icon: React.ReactNode; title: string; desc?: string; children: React.ReactNode
 }) {
