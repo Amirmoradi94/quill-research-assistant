@@ -73,7 +73,7 @@ jobs:
           fi
 
       - name: Build desktop package
-        run: npm run desktop:build
+        run: npx --yes @tauri-apps/cli@2 build
         working-directory: web
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
