@@ -87,7 +87,7 @@ export function RedraftModal({ professorId, professorName, onClose, onDone }: {
 
     onDone(okFlag,
       okFlag
-        ? `Redrafted email to ${professorName || `professor #${professorId}`} ✓`
+        ? (professorName ? `Redrafted email to ${professorName} ✓` : 'Redrafted email ✓')
         : `Redraft failed: ${errMsg.slice(0, 200)}`,
     )
     if (okFlag) {
@@ -120,7 +120,7 @@ export function RedraftModal({ professorId, professorName, onClose, onDone }: {
             <p className="text-[12px] mt-0.5"
               style={{ color: 'var(--color-muted)' }}>
               Quill will re-read your profile and{' '}
-              <strong>{professorName || `professor #${professorId}`}</strong>'s
+              <strong>{professorName || 'this contact'}</strong>'s
               page (research summary, papers, hiring intel), then generate a
               fresh draft. The current draft is preserved as a backup.
             </p>
@@ -141,7 +141,7 @@ export function RedraftModal({ professorId, professorName, onClose, onDone }: {
             <textarea ref={taRef} value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               disabled={busy}
-              placeholder={'e.g. "Make the opening more personal — mention their recent paper on adversarial robustness", "Keep it under 200 words", "Emphasise the photovoltaic angle"'}
+              placeholder={'e.g. "Make the opening more personal — mention their recent paper", "Keep it under 200 words", "Emphasize the strongest research fit"'}
               rows={3}
               className="w-full mt-1.5 px-3 py-2 rounded-lg border text-[13px] outline-none font-sans leading-relaxed disabled:opacity-60"
               style={{

@@ -217,7 +217,7 @@ export function Drafts() {
     setBusyAction(`mark-${draft.id}`)
     try {
       await fetch(apiUrl(`/api/drafts/${draft.id}/mark_sent`), { method: 'POST' })
-      setToastTimed({ ok: true, text: `Marked ${draft.professor_name || 'draft'} as sent.` })
+      setToastTimed({ ok: true, text: draft.professor_name ? `Marked ${draft.professor_name} as sent.` : 'Marked as sent.' })
       reload()
     } catch (e) {
       setToastTimed({ ok: false, text: String(e) })
@@ -229,7 +229,7 @@ export function Drafts() {
   const sendViaGmail = async (draft: Draft) => {
     const ok = await confirm({
       title: 'Send this email via Gmail?',
-      detail: `${draft.professor_name} - ${draft.professor_email || 'no email'}`,
+      detail: [draft.professor_name, draft.professor_email].filter(Boolean).join(' - '),
       message: (
         <>
           This will dispatch the email right now through your Gmail account and advance the professor status to sent.
@@ -533,7 +533,7 @@ function DraftGenerationPanel({
             lineHeight: 1.45,
             minHeight: 120,
           }}
-          placeholder="Paste rules or a full email template. Example: keep under 200 words, mention one recent paper, emphasize my autonomous driving research, use a formal postdoc inquiry structure."
+          placeholder="Paste rules or a full email template. Example: keep under 200 words, mention one recent paper, emphasize the strongest fit, use a formal research inquiry structure."
         />
         <div className="mt-2 flex items-center gap-2 flex-wrap">
           {DRAFT_INSTRUCTION_TEMPLATES.map((template) => (
@@ -676,11 +676,13 @@ function DraftQueue({ drafts, onSelect }: { drafts: Draft[]; onSelect: (id: numb
                 <Mail size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--color-brand-600)' }} />
                 <div className="min-w-0">
                   <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--color-ink)' }}>
-                    {draft.professor_name || `Professor #${draft.professor_id}`}
+                    {draft.professor_name || draft.subject || ''}
                   </div>
-                  <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-muted)' }}>
-                    {draft.professor_university || 'No university'}
-                  </div>
+                  {draft.professor_university && (
+                    <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                      {draft.professor_university}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="min-w-0">
@@ -796,7 +798,7 @@ function DraftModal({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={`Draft for ${draft.professor_name || `Professor #${draft.professor_id}`}`}
+        aria-label={draft.professor_name ? `Draft for ${draft.professor_name}` : 'Selected draft'}
         className="relative w-full max-w-[920px] max-h-[92vh] overflow-hidden rounded-md border shadow-2xl"
         style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}
       >
@@ -809,13 +811,13 @@ function DraftModal({
                 to={`/professors/${draft.professor_id}`}
                 className="inline-block max-w-full truncate hover:underline"
                 style={{ color: 'var(--color-ink)' }}
-                aria-label={`Open profile for ${draft.professor_name || `Professor #${draft.professor_id}`}`}
+                aria-label={draft.professor_name ? `Open profile for ${draft.professor_name}` : 'Open profile'}
               >
-                {draft.professor_name || `Professor #${draft.professor_id}`}
+                {draft.professor_name || draft.subject || ''}
               </Link>
             </h2>
             <div className="text-[12px] mt-1 truncate" style={{ color: 'var(--color-ink-soft)' }}>
-              {[draft.professor_university, draft.professor_email].filter(Boolean).join(' - ') || 'No recipient metadata'}
+              {[draft.professor_university, draft.professor_email].filter(Boolean).join(' - ')}
             </div>
           </div>
           <button

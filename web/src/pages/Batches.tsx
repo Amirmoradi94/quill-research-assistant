@@ -700,7 +700,7 @@ export function Batches() {
                 title: 'Send this email now?',
                 detail: `${previewDraft.professor_name || previewDraft.name} · ${previewDraft.email || 'no email'}`,
                 message: (
-                  <>Dispatches via your connected Gmail immediately, advances the professor status to sent, and attaches the files listed in this modal. <strong>This action cannot be undone.</strong></>
+                  <>Dispatches via your connected Gmail immediately, advances the contact status to sent, and attaches the files listed in this modal. <strong>This action cannot be undone.</strong></>
                 ) as any,
                 variant: 'danger',
                 confirmLabel: 'Send now',

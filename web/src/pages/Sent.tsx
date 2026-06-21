@@ -514,7 +514,7 @@ function ReplyCard({ reply, professorId, onChanged }: {
     const ok1 = await confirm({
       variant: 'primary',
       title: 'Review before sending',
-      detail: `To: ${reply.from_email || 'the professor'}`,
+      detail: reply.from_email ? `To: ${reply.from_email}` : 'Recipient email missing',
       message: 'Quill drafted this reply. Read it over before sending a real email from Gmail.',
       confirmLabel: 'Looks good, continue',
       cancelLabel: 'Keep editing',
@@ -562,7 +562,9 @@ function ReplyCard({ reply, professorId, onChanged }: {
         style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)', color: 'var(--color-muted)' }}
         onClick={() => setCollapsed(false)}>
         <X size={12} />
-        <span className="min-w-0 flex-1 truncate">Dismissed reply from {reply.from_name || reply.from_email || 'unknown'}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {reply.from_name || reply.from_email ? `Dismissed reply from ${reply.from_name || reply.from_email}` : 'Dismissed reply'}
+        </span>
         <span className="underline">Show</span>
       </button>
     )
@@ -678,7 +680,7 @@ function ReplyCard({ reply, professorId, onChanged }: {
                   className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
                   style={{ background: 'linear-gradient(135deg, #dc2626, #991b1b)', boxShadow: '0 6px 16px -6px rgba(220,38,38,0.55)' }}>
                   {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                  {sending ? 'Sending...' : `Send to ${reply.from_email || 'professor'}`}
+                  {sending ? 'Sending...' : (reply.from_email ? `Send to ${reply.from_email}` : 'Send reply')}
                 </button>
               </div>
             </>

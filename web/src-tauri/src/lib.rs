@@ -126,10 +126,21 @@ fn publish_api_base(app: &tauri::App, runtime: &DesktopRuntime, app_data_dir: &P
 }
 
 fn spawn_dev_backend(backend_port: u16, scraper_port: u16) -> Option<Child> {
-    let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|web_dir| web_dir.parent())
-        .map(|root| root.join("scripts/start_backend_desktop.sh"))?;
+    let mut search_roots = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        search_roots.push(current_dir);
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            search_roots.push(parent.to_path_buf());
+        }
+    }
+
+    let script = search_roots
+        .into_iter()
+        .flat_map(|root| root.ancestors().map(PathBuf::from).collect::<Vec<_>>())
+        .map(|root| root.join("scripts/start_backend_desktop.sh"))
+        .find(|candidate| candidate.is_file())?;
 
     Command::new(script)
         .env("POSTDOC_DESKTOP", "1")
@@ -264,7 +275,10 @@ pub fn run() {
                             .env("POSTDOC_DESKTOP", "1")
                             .env("PORT", runtime.backend_port.to_string())
                             .env("POSTDOC_DISABLE_REPLY_POLLER", "1")
-                            .env("SCRAPER_URL", format!("http://127.0.0.1:{}", runtime.scraper_port))
+                            .env(
+                                "SCRAPER_URL",
+                                format!("http://127.0.0.1:{}", runtime.scraper_port),
+                            )
                             .spawn()
                             .ok()
                     })

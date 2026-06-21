@@ -389,31 +389,31 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
                     <Row label="Keywords">
                       <input value={s.primary_keywords}
                         onChange={(e) => set('primary_keywords', e.target.value)}
-                        placeholder="e.g. structural health monitoring, graph neural networks…"
+                        placeholder="Primary keywords"
                         className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
                     </Row>
                     <Row label="Adjacent areas">
                       <input value={s.adjacent_areas}
                         onChange={(e) => set('adjacent_areas', e.target.value)}
-                        placeholder="e.g. signal processing, computer vision…"
+                        placeholder="Adjacent areas"
                         className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
                     </Row>
                     <Row label="Methods / tools">
                       <input value={s.methods_techniques}
                         onChange={(e) => set('methods_techniques', e.target.value)}
-                        placeholder="e.g. LSTM, finite element analysis, fMRI…"
+                        placeholder="Methods, tools, or techniques"
                         className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
                     </Row>
                     <Row label="Application domain">
                       <input value={s.application_domain}
                         onChange={(e) => set('application_domain', e.target.value)}
-                        placeholder="e.g. healthcare, autonomous vehicles, climate…"
+                        placeholder="Application domain"
                         className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
                     </Row>
                     <Row label="Departments">
                       <input value={s.target_departments}
                         onChange={(e) => set('target_departments', e.target.value)}
-                        placeholder="e.g. Civil Engineering, Mechanical Engineering, Mila…"
+                        placeholder="Target departments or institutes"
                         className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
                       <span className="text-[11px] ml-2" style={{ color: 'var(--color-muted)' }}>
                         scope to specific departments / schools / institutes
@@ -1010,7 +1010,7 @@ function CandidatePreview({ p, onAccept, onDismiss, onResearch, researching }: {
   }
 
   const extra = p as any
-  const hiringNotes = extra.hiring_notes || extra.contact_instructions || extra.hiring_intel?.[extra.position_type || 'postdoc']
+  const hiringNotes = extra.hiring_notes || extra.contact_instructions || (extra.position_type ? extra.hiring_intel?.[extra.position_type] : undefined)
   const score = p.match_score ?? p.relevance_score ?? null
 
   return (
@@ -1399,14 +1399,6 @@ export function Discover() {
                     Add all
                   </button>
                 )}
-                <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-semibold disabled:opacity-60"
-                  style={{ background: 'var(--color-ink)', color: 'white' }}>
-                  {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
-                    ? <Loader size={12} className="animate-spin" />
-                    : <Sparkles size={12} />}
-                  Run
-                </button>
               </div>
             </div>
 

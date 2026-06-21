@@ -576,7 +576,7 @@ function PrepDetail({ prep, onBack, onChanged, onRegenerate, regenerating }: {
           {tab === 'qa' && <QATab prep={prep} save={save} />}
           {tab === 'logistics' && <LogisticsTab prep={prep} save={save} />}
           {tab === 'mock' && (
-            <MockInterviewPanel prepId={prep.id} professorName={prep.professor_name || 'the professor'} />
+            <MockInterviewPanel prepId={prep.id} professorName={prep.professor_name || 'this contact'} />
           )}
         </div>
 

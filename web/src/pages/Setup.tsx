@@ -317,8 +317,8 @@ export function Setup() {
             >
               <div className="grid gap-3">
                 <TextField label="Name" value={profileDraft.name} onChange={(v) => setProfileDraft((p) => ({ ...p, name: v }))} placeholder="Your full name" />
-                <TextField label="Email" value={profileDraft.email} onChange={(v) => setProfileDraft((p) => ({ ...p, email: v }))} placeholder="you@university.edu" />
-                <TextField label="Role" value={profileDraft.role} onChange={(v) => setProfileDraft((p) => ({ ...p, role: v }))} placeholder="PhD candidate" />
+                <TextField label="Email" value={profileDraft.email} onChange={(v) => setProfileDraft((p) => ({ ...p, email: v }))} placeholder="name@example.com" />
+                <TextField label="Role" value={profileDraft.role} onChange={(v) => setProfileDraft((p) => ({ ...p, role: v }))} placeholder="Current role" />
               </div>
               <button
                 onClick={saveProfile}
@@ -485,16 +485,29 @@ function ProviderChoice({ name, description, available, selected, busy, onClick,
             Sign in
           </button>
         )}
-        {installed && signedIn && (
+        {installed && signedIn && selected && (
+          <div
+            aria-current="true"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-semibold"
+            style={{
+              background: 'var(--color-green-700)',
+              color: 'var(--color-white)',
+              boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--color-green-700) 82%, black)',
+            }}
+          >
+            <CheckCircle2 size={13} />
+            Selected
+          </div>
+        )}
+        {installed && signedIn && !selected && (
           <button
             type="button"
             onClick={onClick}
             disabled={!available || busy}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-white"
-            style={{ background: selected ? 'var(--color-green-700)' : 'var(--color-brand-600)' }}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+            style={{ background: 'var(--color-brand-600)' }}
           >
-            {selected ? <CheckCircle2 size={13} /> : null}
-            {selected ? 'Selected' : 'Use'}
+            Use
           </button>
         )}
       </div>

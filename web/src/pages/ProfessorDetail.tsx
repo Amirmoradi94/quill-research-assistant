@@ -500,7 +500,7 @@ function DraftEmailControl({
             color: 'var(--color-ink)',
             lineHeight: 1.45,
           }}
-          placeholder="Optional instructions, e.g. make it concise, emphasize autonomous driving, mention I attached my CV, avoid saying I am available immediately..."
+          placeholder="Optional instructions, e.g. make it concise, emphasize the strongest fit, mention I attached my CV, avoid unverified claims..."
         />
 
         {draftRun.state !== 'idle' && (

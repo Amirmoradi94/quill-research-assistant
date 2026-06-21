@@ -68,7 +68,7 @@
     <!-- OVERVIEW -->
     <section x-show="view==='overview'" x-transition class="space-y-7">
       <div>
-        <h2 class="text-xl font-semibold">Good to see you back, Amir 👋</h2>
+        <h2 class="text-xl font-semibold">Good to see you back</h2>
         <p class="text-muted text-sm mt-1">Here's where your research-position search stands today.</p>
       </div>
 
@@ -598,7 +598,7 @@
           <label><span class="text-xs text-muted font-medium">Date sent</span>
             <input type="date" x-model="editing.date_sent" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
           <label><span class="text-xs text-muted font-medium">Email</span>
-            <input type="email" x-model="editing.email" placeholder="prof@university.ca" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
+            <input type="email" x-model="editing.email" placeholder="professor@example.edu" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
           <label class="col-span-2"><span class="text-xs text-muted font-medium">Research category</span>
             <select x-model="editing.research_category" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm">
               <option value="">— uncategorized —</option>
@@ -667,8 +667,7 @@
               <li>Subject line: concrete, not generic ("Research position inquiry" alone gets skipped)</li>
               <li>Open with one sentence placing yourself; don't bury the ask</li>
               <li>Cite one specific paper of theirs and how it connects to your work</li>
-              <li>Papers under review should be framed as "currently under review at [venue]"</li>
-              <li>The Montreal driving dataset is internal — describe as "large-scale, not yet public"</li>
+              <li>Only mention papers, datasets, and accomplishments that are verified in the profile or attached CV</li>
               <li>Close with a low-commitment ask (15 min call, feedback on a one-pager, etc.)</li>
             </ul>
           </details>
@@ -699,9 +698,9 @@
           <label class="col-span-2"><span class="text-xs text-muted font-medium">Name</span>
             <input type="text" x-model="editingFellowship.name" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm focus:border-brand-500 focus:bg-white outline-none"/></label>
           <label><span class="text-xs text-muted font-medium">Deadline</span>
-            <input type="text" x-model="editingFellowship.deadline" placeholder="Oct 2026 / Rolling / TBD" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+            <input type="text" x-model="editingFellowship.deadline" placeholder="Deadline" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
           <label><span class="text-xs text-muted font-medium">Amount</span>
-            <input type="text" x-model="editingFellowship.amount" placeholder="~$70K CAD/yr" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
+            <input type="text" x-model="editingFellowship.amount" placeholder="Amount" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
           <label class="col-span-2"><span class="text-xs text-muted font-medium">Eligibility</span>
             <input type="text" x-model="editingFellowship.eligibility" class="w-full bg-paper border border-line rounded-md px-3 py-2 mt-1 text-sm"/></label>
           <label><span class="text-xs text-muted font-medium">Status</span>

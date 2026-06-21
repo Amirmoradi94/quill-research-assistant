@@ -121,97 +121,96 @@ came from extraction (not a copy of `existing_profile`) must also appear in
     "city": "...",
     "country": "...",
     "nationality": null,
-    "languages": [{"lang": "English", "level": "native"}],
+    "languages": [{"lang": "Language", "level": "proficiency"}],
     "orcid": "0000-...",
     "scholar_url": "https://scholar.google.com/...",
     "github": "...",
     "linkedin": "...",
     "website": "...",
     "twitter": null,
-    "current_role": "Postdoctoral researcher",
-    "affiliation": "McGill University, ECE",
+    "current_role": "...",
+    "affiliation": "...",
     "headline": "...",
     "research_interests": "...",
-    "research_categories": ["cv", "av"],
-    "methods": ["deep learning", "sensor fusion"],
-    "application_domains": ["autonomous vehicles"],
-    "tools_frameworks": ["PyTorch", "ROS"],
-    "datasets_used": ["KITTI", "nuScenes"],
+    "research_categories": ["..."],
+    "methods": ["..."],
+    "application_domains": ["..."],
+    "tools_frameworks": ["..."],
+    "datasets_used": ["..."],
     "datasets_created": [
-      {"name": "Montreal driving dataset", "status": "private"}
+      {"name": "...", "status": "..."}
     ],
     "programming_languages": [
-      {"name": "Python", "proficiency": "expert"},
-      {"name": "C++", "proficiency": "advanced"}
+      {"name": "...", "proficiency": "..."}
     ],
     "certifications": [],
-    "reviewing_venues": ["IEEE Transactions on Intelligent Transportation Systems", "ICRA"],
-    "teaching_summary": "TA for ECSE-512 (Digital Signal Processing) 2024-2025"
+    "reviewing_venues": ["..."],
+    "teaching_summary": "..."
   },
   "education": [
     {
-      "degree_level": "PhD",
-      "field": "Electrical and Computer Engineering",
-      "institution": "McGill University",
-      "department": "Department of ECE",
-      "start_date": "2021-09-01",
-      "end_date": "2026-04-01",
+      "degree_level": "...",
+      "field": "...",
+      "institution": "...",
+      "department": "...",
+      "start_date": null,
+      "end_date": null,
       "is_current": false,
       "gpa": 4.0,
       "gpa_scale": 4.0,
       "honors": null,
       "advisor_name": "Prof. ...",
-      "advisor_title": "Professor of ECE",
+      "advisor_title": "Professor",
       "co_advisor_name": null,
       "thesis_title": "...",
       "thesis_abstract": null,
       "key_courses": [
-        {"name": "Advanced Machine Learning", "grade": "A", "year": 2022}
+        {"name": "...", "grade": "...", "year": 2022}
       ]
     }
   ],
   "publications": [
     {
       "title": "...",
-      "authors": "A. Moradi, B. Smith, C. Jones",
-      "venue_full_name": "IEEE Transactions on Intelligent Transportation Systems",
-      "venue_short": "T-ITS",
+      "authors": "...",
+      "venue_full_name": "...",
+      "venue_short": "...",
       "year": 2026,
-      "type": "journal",
+      "type": "...",
       "status": "under_review",
       "doi": null,
       "url": null,
       "citation_count": null,
-      "your_role": "first author, lead design and experiments",
+      "your_role": "...",
       "abstract": null,
-      "one_line_takeaway": "An end-to-end perception model robust to fog and snow on automotive lidar.",
+      "one_line_takeaway": "...",
       "is_signature": true
     }
   ],
   "experience": [
     {
-      "title": "Postdoctoral researcher",
-      "employer": "McGill University",
+      "title": "...",
+      "employer": "...",
       "lab_or_group": "...",
       "supervisor": "...",
-      "location": "Montreal, CA",
-      "start_date": "2026-05-01",
+      "location": "...",
+      "start_date": null,
       "end_date": null,
       "is_current": true,
       "bullets": [
-        "Led development of multi-sensor fusion pipeline for adverse-weather AV perception."
+        "..."
       ],
-      "tech_used": ["PyTorch", "ROS"]
+      "tech_used": ["..."]
     }
   ],
   "awards": [
     {
-      "name": "NSERC Postdoctoral Fellowship",
-      "granting_body": "NSERC",
-      "amount": 70000,
-      "currency": "CAD",
-      "year": 2026,
-      "type": "fellowship",
+      "name": "...",
+      "granting_body": "...",
+      "amount": null,
+      "currency": null,
+      "year": null,
+      "type": "...",
       "notes": null
     }
   ],
@@ -219,10 +218,10 @@ came from extraction (not a copy of `existing_profile`) must also appear in
     {
       "name": "Prof. ...",
       "title": "Professor",
-      "institution": "McGill University",
+      "institution": "...",
       "email": "...",
-      "relationship_type": "PhD advisor",
-      "years_known": 5,
+      "relationship_type": "...",
+      "years_known": null,
       "notes": null
     }
   ],

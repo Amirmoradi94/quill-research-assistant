@@ -12,7 +12,7 @@ You are helping a researcher set up their dashboard profile by reading their upl
 Read the CV carefully and extract the following fields:
 
 1. **full_name** — the person's full name as it appears on the CV
-2. **current_role** — their current position (e.g. "MSc student", "PhD student", "Research Engineer", "Postdoctoral researcher")
+2. **current_role** — their current position title exactly as it appears or can be inferred from the CV
 3. **affiliation** — their current university, institute, or company
 4. **country** — country of current affiliation, if determinable from the CV
 5. **research_interests** — a 2–3 sentence paragraph summarising their research focus, methods, and goals, written in first person as they would describe themselves

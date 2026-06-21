@@ -64,15 +64,15 @@ class User(Base):
     # Research profile (matching engine inputs)
     headline = Column(String, nullable=True)                   # 1-sentence pitch
     research_interests = Column(Text, nullable=True)           # paragraph
-    research_categories = Column(JSON, nullable=True)          # ["cv","rl"] — matches --color-cat-*
-    methods = Column(JSON, nullable=True)                      # ["deep learning","MPC"]
-    application_domains = Column(JSON, nullable=True)          # ["autonomous vehicles"]
-    tools_frameworks = Column(JSON, nullable=True)             # ["PyTorch","ROS"]
+    research_categories = Column(JSON, nullable=True)          # category slugs; matches --color-cat-*
+    methods = Column(JSON, nullable=True)
+    application_domains = Column(JSON, nullable=True)
+    tools_frameworks = Column(JSON, nullable=True)
     datasets_used = Column(JSON, nullable=True)
     datasets_created = Column(JSON, nullable=True)             # [{"name":"...","status":"private"}]
 
     # Skills (scalars — repeatable items use the related tables below)
-    programming_languages = Column(JSON, nullable=True)        # [{"name":"Python","proficiency":"expert"}]
+    programming_languages = Column(JSON, nullable=True)
     certifications = Column(JSON, nullable=True)
     reviewing_venues = Column(JSON, nullable=True)
     teaching_summary = Column(Text, nullable=True)

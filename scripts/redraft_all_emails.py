@@ -22,7 +22,7 @@ from pathlib import Path
 import httpx
 
 API_BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
-DB_PATH = os.environ.get("POSTDOC_DB", "/Users/amirmoradi94/Desktop/postdoc/dashboard/data/postdoc.db")
+DB_PATH = os.environ.get("POSTDOC_DB", str(Path(__file__).resolve().parent.parent / "data" / "postdoc.db"))
 
 
 def run_draft(prof_id: int, prof_name: str) -> tuple[bool, str]:

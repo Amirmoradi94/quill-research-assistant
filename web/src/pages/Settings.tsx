@@ -202,19 +202,19 @@ export function Settings() {
         <Section icon={<User size={16} />} title="Your Profile"
           desc="Your name and affiliation appear in the app greeting and are used by Quill when drafting outreach.">
           <Field label="Full name" value={profile.name || ''}
-            placeholder="Lena Fischer"
+            placeholder="Your full name"
             onSave={(v) => saveProfile({ name: v })} />
           <Field label="Email" value={profile.email || ''}
-            placeholder="you@university.edu"
+            placeholder="name@example.com"
             onSave={(v) => saveProfile({ email: v })} />
           <Field label="Current role" value={profile.current_role || ''}
-            placeholder="MSc Student / PhD Candidate"
+            placeholder="Current role"
             onSave={(v) => saveProfile({ current_role: v })} />
           <Field label="Affiliation" value={profile.affiliation || ''}
-            placeholder="University name"
+            placeholder="Affiliation"
             onSave={(v) => saveProfile({ affiliation: v })} />
           <Field label="Country" value={profile.country || ''}
-            placeholder="Germany"
+            placeholder="Country"
             onSave={(v) => saveProfile({ country: v })} />
           <div className="flex items-start gap-2 mb-2">
             <div className="text-[12px] w-44 flex-shrink-0 pt-2" style={{ color: 'var(--color-muted)' }}>
@@ -226,7 +226,7 @@ export function Settings() {
               onBlur={(e) => saveProfile({ research_interests: e.target.value })}
               className="flex-1 px-2.5 py-1.5 rounded-md border text-[13px] outline-none font-sans"
               style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)', lineHeight: 1.5 }}
-              placeholder="e.g. structural health monitoring, fiber optic sensing, ML-based damage detection" />
+              placeholder="Research interests" />
           </div>
         </Section>
       )}
@@ -900,7 +900,7 @@ function GmailSection({ s, save, reload }: {
           Send-as name
         </div>
         <input value={name} onChange={(e) => setName(e.target.value)}
-          placeholder="Amir Moradi"
+          placeholder="Your name"
           className="flex-1 px-2.5 py-1.5 rounded-md border text-[13px] outline-none"
           style={{ background: 'var(--color-paper)', borderColor: 'var(--color-line)' }} />
       </div>

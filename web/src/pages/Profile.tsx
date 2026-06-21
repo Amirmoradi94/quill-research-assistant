@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Sparkles, CheckCircle2, Plus, Trash2, X, Play, RefreshCw, Star,
   MapPin, Briefcase, GraduationCap, FlaskConical, FileText, Award, Wrench,
@@ -31,36 +31,6 @@ function titleize(s?: string | null): string {
     .join(' ')
 }
 
-function emptyProfile(): UserProfileFull {
-  return {
-    id: 0,
-    name: 'Amir Moradi',
-    preferred_name: null,
-    pronouns: null,
-    headshot_url: null,
-    email: null,
-    current_role: 'Ph.D. candidate',
-    affiliation: 'Concordia University',
-    country: null,
-    city: null,
-    research_interests: null,
-    research_categories: [],
-    methods: [],
-    application_domains: [],
-    tools_frameworks: [],
-    datasets_used: [],
-    datasets_created: [],
-    programming_languages: [],
-    certifications: [],
-    reviewing_venues: [],
-    education: [],
-    publications: [],
-    experience: [],
-    awards: [],
-    references: [],
-  }
-}
-
 const SECTIONS = [
   { id: 'target',       label: 'Target',         icon: Target },
   { id: 'research',     label: 'Research',       icon: FlaskConical },
@@ -79,27 +49,47 @@ export function Profile() {
   const [err, setErr]   = useState<string | null>(null)
   const [extractOpen, setExtractOpen] = useState(false)
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     try {
       setData(await api.user())
       setErr(null)
     } catch (e: any) {
       setErr(String(e))
-      setData((current) => current ?? emptyProfile())
     }
-  }
+  }, [])
+
   useEffect(() => {
     reload()
     window.addEventListener('quill:data-changed', reload)
     return () => window.removeEventListener('quill:data-changed', reload)
-  }, [])
+  }, [reload])
+
+  useEffect(() => {
+    if (!err || data) return
+    const timer = window.setTimeout(reload, 1500)
+    return () => window.clearTimeout(timer)
+  }, [data, err, reload])
 
   const patch = async (payload: Partial<UserProfileFull>) => {
     const next = await api.patchUser(payload)
     setData(next)
   }
 
-  if (!data) return <div className="p-8" style={{ color: 'var(--color-muted)' }}>Loading…</div>
+  if (!data) return (
+    <div className="p-8" style={{ color: 'var(--color-muted)' }}>
+      <div className="mb-3">Profile is loading…</div>
+      {err && (
+        <button
+          onClick={reload}
+          className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-medium"
+          style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper-2)', color: 'var(--color-ink)' }}
+        >
+          <RefreshCw size={14} />
+          Retry
+        </button>
+      )}
+    </div>
+  )
 
   return (
     <div
@@ -1028,10 +1018,11 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
             className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border font-medium text-[14px] transition-transform enabled:hover:-translate-y-0.5 disabled:cursor-not-allowed"
             style={{
               background: busy || !data.cv_doc_id
-                ? 'var(--color-paper-2)'
+                ? '#f8fafc'
                 : 'linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))',
-              borderColor: busy || !data.cv_doc_id ? 'var(--color-line-strong)' : 'var(--color-brand-700)',
-              color: busy || !data.cv_doc_id ? 'var(--color-ink-soft)' : 'white',
+              borderColor: busy || !data.cv_doc_id ? '#94a3b8' : 'var(--color-brand-700)',
+              color: busy || !data.cv_doc_id ? '#1f2937' : 'white',
+              opacity: 1,
               boxShadow: busy || !data.cv_doc_id ? 'inset 0 0 0 1px rgba(28,34,48,0.04)' : '0 6px 16px -6px rgba(47,92,203,0.5)',
             }}>
             {busy ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
@@ -1053,11 +1044,11 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
 // ─── Primitives ────────────────────────────────────────────────────
 async function addChild(kind: Kind, setData: React.Dispatch<React.SetStateAction<UserProfileFull | null>>) {
   const defaults: Record<Kind, any> = {
-    education:    { degree_level: 'PhD' },
-    publications: { title: 'New publication', status: 'in_prep' },
-    experience:   { title: 'New role' },
-    awards:       { name: 'New award' },
-    references:   { name: 'New reference' },
+    education:    { degree_level: '' },
+    publications: { title: '' },
+    experience:   { title: '' },
+    awards:       { name: '' },
+    references:   { name: '' },
   }
   await api.addUserItem(kind, defaults[kind])
   setData(await api.user())

@@ -420,7 +420,7 @@ export function Home() {
               <LoadingLine text="Profile signals are loading." compact />
             ) : (
               <>
-                <ListLine title={user?.name || profile?.name || 'Amir Moradi'} meta={user?.headline || profile?.current_role || 'Research candidate'} />
+                <ListLine title={user?.name || profile?.name || 'No profile yet'} meta={user?.headline || profile?.current_role || 'Add your profile'} />
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {researchTags.length > 0 ? researchTags.slice(0, 5).map((tag) => (
                     <span key={tag} className="px-2 py-0.5 rounded-full text-[11px] font-medium" style={{ background: 'var(--color-ink)', color: 'white' }}>

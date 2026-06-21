@@ -12,7 +12,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = os.environ.get("POSTDOC_DB", "/Users/amirmoradi94/Desktop/postdoc/dashboard/data/postdoc.db")
+DB_PATH = os.environ.get("POSTDOC_DB", str(Path(__file__).resolve().parent.parent / "data" / "postdoc.db"))
 
 
 def main() -> None:

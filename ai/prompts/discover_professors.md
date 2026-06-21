@@ -1,8 +1,7 @@
 {# Quill prompt — discover_professors
    Searches the web for professors whose research closely matches the user's
    profile and returns a ranked JSON list of potential supervisors. #}
-You are helping **{{ user.name }}**, a {{ user.current_role }} at {{ user.affiliation }},
-find faculty to contact for **{{ position_type or "PhD" }}** positions.
+You are helping the dashboard user find faculty to contact{% if position_type %} for **{{ position_type }}** positions{% endif %}.
 
 ---
 
@@ -28,7 +27,7 @@ Research categories: {{ user.research_categories | join(', ') }}
 
 ## Search parameters
 
-**Position type:** {{ position_type or "phd" }}
+{% if position_type %}**Position type:** {{ position_type }}{% endif %}
 {% if discovery_batch and discovery_total_batches %}
 **Discovery batch:** {{ discovery_batch }} of {{ discovery_total_batches }}
 **Overall target:** {{ discovery_total_target }} professors across all batches
@@ -93,7 +92,7 @@ For each candidate:
 - Prioritise thematic overlap — not just keyword matching or field name
 {% if max_per_university and max_per_university > 0 %}- No more than {{ max_per_university }} professors from the same university{% else %}- No cap on professors per university — include every relevant match{% endif %}
 {% if target_departments %}- Strictly filter by target departments: {{ target_departments }}. Skip professors outside these departments even if their research overlaps.{% endif %}
-- Prefer professors who have supervised students in the target position type ({{ position_type or "phd" }})
+{% if position_type %}- Prefer professors who have supervised students in the target position type ({{ position_type }}){% endif %}
 - Interdisciplinary profiles → cast a wider net across adjacent departments
 - If required countries / regions are provided, verify the university location before returning the professor
 - Be honest: if you cannot confirm a match or the page is unavailable, skip
@@ -118,7 +117,7 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
       "research_angle": "1–2 sentences: what they work on and exactly why it matches this applicant",
       "research_summary": "2–3 sentences with the strongest concrete facts found on the profile/lab page",
       "research_category": "primary category keyword (lowercase, short)",
-      "position_type": "{{ position_type or 'phd' }}",
+      "position_type": "{{ position_type or '' }}",
       "match_score": 85,
       "hiring_signals": true,
       "hiring_notes": "1–3 short bullets or null",

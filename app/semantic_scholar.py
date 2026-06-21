@@ -103,7 +103,7 @@ def _affiliation_tokens(university: str | None) -> set[str]:
     e.g. "HEC Montréal" → {"hec", "montreal"}
          "Polytechnique Montréal" → {"polytechnique", "montreal"}
          "École de technologie supérieure (ÉTS)" → {"ets", "ecole", "technologie", "superieure"}
-    Strips diacritics so 'Montréal' matches 'Montreal' in S2 affiliations.
+    Strips diacritics so accented and unaccented affiliation spellings match.
     """
     if not university:
         return set()
@@ -168,7 +168,7 @@ def _best_author(candidates: list[dict], name: str, university: str | None = Non
         return None
 
     # When S2 returned no affiliation data at all, the matcher can't see the
-    # difference between "F. Khomh" (423 papers, the real prolific researcher)
+    # difference between a prolific homonym and the intended lower-paper-count author.
     # and "Foutse Khomh" (7-paper stub of the same person). The exact-name
     # bonus pushes the stub to win. Detect this case and fall back to
     # paper-count among candidates that share the surname AND aren't tiny

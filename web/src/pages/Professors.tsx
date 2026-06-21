@@ -475,7 +475,7 @@ function AddPanel({ addForm, setAddForm, adding, onAdd, onClose }: {
           <AddField label="University" value={addForm.university} onChange={(v) => setAddForm((f) => ({ ...f, university: v }))} />
           <AddField label="Email" value={addForm.email} onChange={(v) => setAddForm((f) => ({ ...f, email: v }))} />
           <AddField label="Research angle" value={addForm.research_angle} onChange={(v) => setAddForm((f) => ({ ...f, research_angle: v }))} />
-          <AddField label="Category" value={addForm.research_category} onChange={(v) => setAddForm((f) => ({ ...f, research_category: v }))} placeholder="cv, robotics, structural..." />
+          <AddField label="Category" value={addForm.research_category} onChange={(v) => setAddForm((f) => ({ ...f, research_category: v }))} placeholder="Research category" />
           <SelectField label="Tier" value={addForm.tier} onChange={(v) => setAddForm((f) => ({ ...f, tier: v }))} options={['T1', 'T2', 'T3']} />
           <SelectField label="Position type" value={addForm.position_type} onChange={(v) => setAddForm((f) => ({ ...f, position_type: v }))} options={['phd', 'postdoc', 'master']} />
         </div>

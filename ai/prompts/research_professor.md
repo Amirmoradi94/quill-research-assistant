@@ -70,7 +70,7 @@ For each selected paper write:
 
 Papers (title | venue | year | abstract excerpt):
 {% for p in s2_papers %}
-- **{{ p.title }}** | {{ p.venue or "?" }} | {{ p.year or "?" }}
+- **{{ p.title }}**{% if p.venue %} | {{ p.venue }}{% endif %}{% if p.year %} | {{ p.year }}{% endif %}
   {% if p.abstract %}{{ p.abstract[:400] }}{% if p.abstract | length > 400 %}…{% endif %}{% endif %}
   {% if p.url %}[{{ p.url }}]{% endif %}
 {% endfor %}

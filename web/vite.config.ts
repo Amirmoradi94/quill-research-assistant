@@ -13,9 +13,10 @@ export default defineConfig(async () => {
   return {
     plugins: [...reactPlugin, ...tailwindPlugin],
     resolve: {
-      alias: {
-        '@': path.resolve(__dirname, './src'),
-      },
+      alias: [
+        { find: '@', replacement: path.resolve(__dirname, './src') },
+        { find: /^lucide-react$/, replacement: path.resolve(__dirname, './src/lib/lucide-icons.ts') },
+      ],
     },
     server: {
       port: 5173,
@@ -24,6 +25,11 @@ export default defineConfig(async () => {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true,
         },
+      },
+    },
+    build: {
+      rollupOptions: {
+        maxParallelFileOps: 20,
       },
     },
   }

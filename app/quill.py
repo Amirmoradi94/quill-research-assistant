@@ -507,7 +507,7 @@ def _resolve_user_context(db: Session) -> dict[str, Any]:
         user_ctx["awards"] = [_shim(row) for row in user.awards]
         user_ctx["references"] = [_shim(row) for row in user.references]
     else:
-        user_ctx = _shim(None, default={"name": "the user", "current_role": "researcher", "affiliation": "(unknown)", "research_interests": "(unknown)"})
+        user_ctx = _shim(None, default={})
     return {
         "user": user_ctx,
     }
@@ -629,7 +629,9 @@ def _score_discovery_paper(
 
 
 def _discovery_paper_summary(paper: dict[str, Any], matched_terms: list[str]) -> str:
-    title = str(paper.get("title") or "This paper")
+    title = str(paper.get("title") or "").strip()
+    if not title:
+        return ""
     year = paper.get("year")
     year_text = f" ({year})" if year else ""
     if matched_terms:
@@ -991,7 +993,7 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
             )
             if existing:
                 continue
-            position_type = p.get("position_type") or request.params.get("position_type") or "phd"
+            position_type = p.get("position_type") or request.params.get("position_type") or None
             hiring_signal = p.get("hiring_signals")
             prof = models.Professor(
                 name=str(p["name"]).strip(),

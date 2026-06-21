@@ -18,7 +18,7 @@ Professor {{ professor.name }} at {{ professor.university }}.
 {% if user.education %}
 ### Education (newest first)
 {% for ed in user.education %}
-- **{{ ed.degree_level }}** in {{ ed.field or "(field?)" }} at {{ ed.institution or "(institution?)" }}{% if ed.end_date %}, completed {{ ed.end_date.year if ed.end_date.__class__.__name__ == 'date' else ed.end_date }}{% endif %}{% if ed.advisor_name %} — advisor: {{ ed.advisor_name }}{% if ed.co_advisor_name %}, co-advisor: {{ ed.co_advisor_name }}{% endif %}{% endif %}{% if ed.thesis_title %}. Thesis: "{{ ed.thesis_title }}"{% endif %}
+- **{{ ed.degree_level }}**{% if ed.field %} in {{ ed.field }}{% endif %}{% if ed.institution %} at {{ ed.institution }}{% endif %}{% if ed.end_date %}, completed {{ ed.end_date.year if ed.end_date.__class__.__name__ == 'date' else ed.end_date }}{% endif %}{% if ed.advisor_name %} — advisor: {{ ed.advisor_name }}{% if ed.co_advisor_name %}, co-advisor: {{ ed.co_advisor_name }}{% endif %}{% endif %}{% if ed.thesis_title %}. Thesis: "{{ ed.thesis_title }}"{% endif %}
 {% endfor %}
 {% elif user.phd_year %}
 - PhD completed: {{ user.phd_year }} at {{ user.phd_institution }}
@@ -30,7 +30,7 @@ Professor {{ professor.name }} at {{ professor.university }}.
 ### Signature publications — lead with these in P2
 
 {% for p in signature_pubs %}
-- **{{ p.title }}** — {{ p.venue_full_name or p.venue_short or "?" }} ({{ p.year or "?" }}), status: {{ p.status or "published" }}{% if p.your_role %}. Role: {{ p.your_role }}{% endif %}{% if p.one_line_takeaway %}. Takeaway: {{ p.one_line_takeaway }}{% endif %}
+- **{{ p.title }}**{% if p.venue_full_name or p.venue_short %} — {{ p.venue_full_name or p.venue_short }}{% endif %}{% if p.year %} ({{ p.year }}){% endif %}{% if p.status %}, status: {{ p.status }}{% endif %}{% if p.your_role %}. Role: {{ p.your_role }}{% endif %}{% if p.one_line_takeaway %}. Takeaway: {{ p.one_line_takeaway }}{% endif %}
 {% endfor %}
 
 CRITICAL: only describe these as "published" if status is "published" or
@@ -40,17 +40,17 @@ or "in preparation" — never claim acceptance.
 
 ## Target position
 
-Position type: **{{ professor.position_type or "postdoc" }}**
+{% if professor.position_type %}Position type: **{{ professor.position_type }}**{% endif %}
 
 ## Professor profile
 
-- Research summary: {{ professor.last_research_summary or professor.research_interests or "(not yet researched)" }}
-- Research angle / pitch: {{ professor.research_angle or "(none provided)" }}
+{% if professor.last_research_summary or professor.research_interests %}- Research summary: {{ professor.last_research_summary or professor.research_interests }}{% endif %}
+{% if professor.research_angle %}- Research angle / pitch: {{ professor.research_angle }}{% endif %}
 {% if professor.lab_url %}- Lab: {{ professor.lab_url }}{% endif %}
 {% if professor.hiring_signals is mapping and professor.hiring_signals %}
 - Hiring signals: postdoc={{ professor.hiring_signals.get('postdoc') }}, phd={{ professor.hiring_signals.get('phd') }}, master={{ professor.hiring_signals.get('master') }}
 {% endif %}
-{% set target_pos = professor.position_type or "postdoc" %}
+{% set target_pos = professor.position_type %}
 {% set pos_intel = professor.hiring_intel[target_pos] if professor.hiring_intel else "" %}
 {% set general_intel = professor.hiring_intel["general"] if professor.hiring_intel else "" %}
 {% if pos_intel %}
@@ -188,7 +188,7 @@ just mention the title — say what the paper does and how it connects to the
 applicant's work.
 
 {% for p in relevant_papers %}
-**{{ p.title }}** ({{ p.venue or "?" }}, {{ p.year or "?" }})
+**{{ p.title }}**{% if p.venue or p.year %} ({% if p.venue %}{{ p.venue }}{% endif %}{% if p.venue and p.year %}, {% endif %}{% if p.year %}{{ p.year }}{% endif %}){% endif %}
 {{ p.relevance_summary }}
 {% if p.url %}Link: {{ p.url }}{% endif %}
 

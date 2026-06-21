@@ -156,19 +156,19 @@ function dashboard() {
       this.saveState = '';
     },
     emailTemplate(prof) {
-      const angle = prof.research_angle || prof.notes || '[research angle here]';
+      const angle = prof.research_angle || prof.notes || '[specific research connection]';
       return `Dear Prof. ${prof.name.split(' ').slice(-1)[0]},
 
-I'm Amir Moradi, finishing my PhD at [institution]. I'm reaching out about postdoc opportunities in your group at ${prof.university}${prof.dept_lab ? ' ('+prof.dept_lab+')' : ''}.
+I'm [your name]. I'm reaching out about research opportunities in your group at ${prof.university}${prof.dept_lab ? ' ('+prof.dept_lab+')' : ''}.
 
 My work focuses on [brief one-liner]. Your work on ${angle} overlaps directly with what I want to build next — specifically [one concrete connection].
 
-Two papers from my PhD are currently under review, and I've built a large-scale Montreal urban driving dataset (not yet public) that could be useful for [specific project].
+[Add one or two verified accomplishments or publications that are relevant to this professor.]
 
-My CV is attached. Would you have 15 minutes in the coming weeks to discuss whether there's a fit?
+My CV is attached. Would you have time in the coming weeks to discuss whether there's a fit?
 
 Best regards,
-Amir Moradi`;
+[your name]`;
     },
     scheduleDraftSave() {
       if (!this.editingDraft?.id) return;

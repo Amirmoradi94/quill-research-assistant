@@ -638,7 +638,7 @@ def get_batches(
     # Stable rank: tier, then category-rotation index, then name
     by_cat = {}
     for d, p in eligible:
-        by_cat.setdefault(p.research_category or "theory", []).append((d, p))
+        by_cat.setdefault(p.research_category or "", []).append((d, p))
     for k in by_cat:
         by_cat[k].sort(key=lambda x: (tier_order.get(x[1].tier, 9), x[1].name.lower()))
 
@@ -666,8 +666,9 @@ def get_batches(
             if uni_count >= max_per_university:
                 continue
             if enforce_cat_cap:
-                cat_count = sum(1 for _, op in b if (op.research_category or "theory") == (p.research_category or "theory"))
-                if cat_count >= cat_cap.get(p.research_category or "theory", batch_size):
+                category = p.research_category or ""
+                cat_count = sum(1 for _, op in b if (op.research_category or "") == category)
+                if cat_count >= cat_cap.get(category, batch_size):
                     continue
             if len(b) >= batch_size:
                 continue
@@ -925,7 +926,7 @@ async def upload_draft_attachment(
     doc_dict = await upload_document(
         background_tasks=background_tasks,
         kind="other",
-        title=file.filename or "attachment",
+        title=file.filename or "",
         is_default=False,
         file=file,
         db=db,
@@ -1153,14 +1154,11 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
     draft = reply.draft
     prof = draft.professor if draft else None
     params = {
-        "user": _shim(user, default={
-            "name": "the applicant", "current_role": "researcher",
-            "research_interests": "(unknown)",
-        }),
+        "user": _shim(user, default={}),
         "professor_name": prof.name if prof else (reply.from_name or ""),
         "original_subject": draft.subject if draft else "",
         "original_body": draft.body if draft else "",
-        "reply_from": reply.from_name or reply.from_email or "the professor",
+        "reply_from": reply.from_name or reply.from_email or "",
         "reply_subject": reply.subject or "",
         "reply_body": reply.body or reply.snippet or "",
         "instruction": instruction,
@@ -1340,7 +1338,7 @@ def _mock_out(m: models.MockInterview) -> dict:
 
 def _user_prompt_dict(user: Optional[models.User]) -> dict:
     if not user:
-        return {"name": "the applicant", "current_role": "researcher", "research_interests": "(unknown)"}
+        return {}
     return {
         "name": user.name,
         "current_role": user.current_role,
@@ -1408,8 +1406,10 @@ def _build_thread(reply: Optional[models.EmailReply]) -> str:
     draft = reply.draft
     if draft:
         parts.append(f"--- Applicant's outreach ---\nSubject: {draft.subject}\n\n{draft.body}")
+    sender = reply.from_name or reply.from_email
+    sender_text = f" ({sender})" if sender else ""
     parts.append(
-        f"--- Professor's reply ({reply.from_name or reply.from_email or 'professor'}) ---\n"
+        f"--- Professor's reply{sender_text} ---\n"
         f"Subject: {reply.subject or ''}\n\n{reply.body or reply.snippet or ''}"
     )
     return "\n\n".join(parts)
@@ -1460,8 +1460,8 @@ async def generate_interview_prep(pid: int, payload: InterviewPrepGenerateIn,
         )
 
     prep = db.query(models.InterviewPrep).filter_by(professor_id=pid).first()
-    meeting_format = payload.meeting_format or (prep.meeting_format if prep else None) or "formal_interview"
-    position_type = prof.position_type or (user.target_position_type if user else None) or "postdoc"
+    meeting_format = payload.meeting_format or (prep.meeting_format if prep else None)
+    position_type = prof.position_type or (user.target_position_type if user else None)
 
     papers = (
         db.query(models.ProfessorPaper)
@@ -1548,7 +1548,7 @@ def _mock_params(db: Session, prep: models.InterviewPrep, transcript: list,
     return {
         "user": _user_prompt_dict(user),
         "professor": _prof_prompt_dict(prof),
-        "position_type": prep.position_type or "postdoc",
+        "position_type": prep.position_type,
         "meeting_format": prep.meeting_format,
         "prep_briefing": briefing.get("summary") or "",
         "transcript": transcript,
