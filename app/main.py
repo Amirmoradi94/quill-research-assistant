@@ -21,7 +21,7 @@ from . import models, schemas
 from .seed import seed_if_empty
 from .quill import RunIn, _drain_run, _prepare_ai_run, router as quill_router
 from .documents import router as documents_router
-from .user_profile import router as user_router
+from .user_profile import _user as get_user_singleton, router as user_router
 from . import scoring
 from .runtime import data_dir, db_path, documents_dir, is_desktop_mode
 
@@ -1722,12 +1722,7 @@ def export_all(db: Session = Depends(get_db)):
 
 @app.get("/api/profile")
 def get_profile(db: Session = Depends(get_db)):
-    u = db.query(models.User).first()
-    if not u:
-        u = models.User(name="")
-        db.add(u)
-        db.commit()
-        db.refresh(u)
+    u = get_user_singleton(db)
     return {
         "id": u.id,
         "name": u.name,
@@ -1749,12 +1744,7 @@ def get_profile(db: Session = Depends(get_db)):
 
 @app.patch("/api/profile")
 def patch_profile(payload: dict, db: Session = Depends(get_db)):
-    u = db.query(models.User).first()
-    if not u:
-        u = models.User(name="")
-        db.add(u)
-        db.commit()
-        db.refresh(u)
+    u = get_user_singleton(db)
     allowed = {
         "name", "email", "current_role", "affiliation", "country",
         "research_interests", "research_categories", "orcid",

@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import models, schemas
@@ -29,7 +30,14 @@ def _user(db: Session) -> models.User:
     if not u:
         u = models.User(id=1, name="")
         db.add(u)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            u = db.get(models.User, 1)
+            if not u:
+                raise
+            return u
         db.refresh(u)
     return u
 
