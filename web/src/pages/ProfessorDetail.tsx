@@ -46,7 +46,7 @@ export function ProfessorDetail() {
     try {
       const [p, d, papersList] = await Promise.all([
         api.professor(Number(id)),
-        fetch(apiUrl(`/api/professors/${id}/draft`)).then((r) => r.ok ? r.json() : null),
+        fetch(apiUrl(`/api/professors/${id}/draft`), { credentials: 'include' }).then((r) => r.ok ? r.json() : null),
         api.professorPapers(Number(id)),
       ])
       setProf(p)
@@ -80,6 +80,7 @@ export function ProfessorDetail() {
     const r = await fetch(apiUrl(`/api/professors/${prof.id}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ [field]: value }),
     })
     if (r.ok) { setEditing(null); reload() }

@@ -9,6 +9,7 @@ Dispatches on Settings.ai_provider:
   - codex_cli      -> `codex exec <prompt>`
   - anthropic_api  -> Messages API (claude-haiku-4-5)
   - openai_api     -> Chat Completions (gpt-4o-mini)
+  - openrouter_api -> OpenRouter Chat Completions
 
 Returns the cleaned text on success, or None on any failure -- callers
 should fall back to the heuristic `text_cleaner.clean_scraped_text`.
@@ -17,13 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from typing import Optional
 
 import httpx
 
 from ai.cli import cli_child_env
-from ai.runner import CLAUDE_NONINTERACTIVE_PERMISSION_ARGS, resolve_cli_path
+from ai.runner import CLAUDE_NONINTERACTIVE_PERMISSION_ARGS, DEFAULT_OPENROUTER_MODEL, resolve_cli_path
 
 from . import models
 
@@ -176,6 +178,31 @@ async def _clean_via_openai_api(prompt: str, api_key: str) -> Optional[str]:
     return (choices[0].get("message") or {}).get("content", "").strip() or None
 
 
+async def _clean_via_openrouter_api(prompt: str, api_key: str, model: str | None) -> Optional[str]:
+    body = {
+        "model": model or DEFAULT_OPENROUTER_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 2000,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-OpenRouter-Title": "Quill AI",
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post("https://openrouter.ai/api/v1/chat/completions", json=body, headers=headers)
+    if r.status_code != 200:
+        return None
+    choices = r.json().get("choices") or []
+    if not choices:
+        return None
+    return (choices[0].get("message") or {}).get("content", "").strip() or None
+
+
 async def clean_hiring_text(
     raw: str,
     prof_name: str,
@@ -204,6 +231,13 @@ async def clean_hiring_text(
         result = await _clean_via_anthropic_api(prompt, settings.anthropic_api_key) if settings.anthropic_api_key else None
     elif provider == "openai_api":
         result = await _clean_via_openai_api(prompt, settings.openai_api_key) if settings.openai_api_key else None
+    elif provider == "openrouter_api":
+        openrouter_key = settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
+        result = await _clean_via_openrouter_api(
+            prompt,
+            openrouter_key,
+            settings.openrouter_model or os.environ.get("OPENROUTER_MODEL"),
+        ) if openrouter_key else None
     else:
         return None
 

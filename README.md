@@ -242,6 +242,40 @@ Open:
 http://localhost:5173
 ```
 
+## Docker Web App
+
+The Docker setup builds the React web app and serves it from the FastAPI
+backend as one dashboard container. The scraper sidecar is included through
+Compose for professor discovery and research workflows.
+
+Create or update `.env` with your runtime AI settings:
+
+```bash
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_MODEL=z-ai/glm-5.2
+OPENROUTER_HTTP_REFERER=http://localhost:8010
+OPENROUTER_TITLE="Quill AI"
+```
+
+Build and run:
+
+```bash
+docker compose up --build
+```
+
+Open:
+
+```text
+http://localhost:8010
+```
+
+Docker stores the SQLite database and uploaded documents in `./data` through a
+bind mount. To use a different host port, set `POSTDOC_DOCKER_PORT`:
+
+```bash
+POSTDOC_DOCKER_PORT=8080 docker compose up --build
+```
+
 Run the desktop development shell:
 
 ```bash

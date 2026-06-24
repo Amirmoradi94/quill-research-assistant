@@ -33,6 +33,7 @@ Research categories: {{ user.research_categories | join(', ') }}
 **Overall target:** {{ discovery_total_target }} professors across all batches
 **This batch target:** {{ count or 10 }} new professors
 {% endif %}
+{% if full_coverage_discovery %}**Coverage mode:** find every strong potential professor you can. The batch target is an operational limit for this run, not a relevance limit.{% endif %}
 {% if start_date %}**Target start date:** {{ start_date }}{% endif %}
 {% if duration and duration != "any" %}**Duration:** {{ duration }} (postdoc){% endif %}
 {% if target_countries %}**Required countries / regions:** {{ target_countries }} - HARD CONSTRAINT. Only return professors whose university is physically located in these countries / regions. Skip all other countries even if the research match is excellent.{% endif %}
@@ -43,8 +44,8 @@ Research categories: {{ user.research_categories | join(', ') }}
 {% if hiring_signals_only %}**Hiring filter:** ONLY include professors with clear active hiring signals{% endif %}
 {% if funding_type and funding_type != "any" %}**Funding type required:** {{ funding_type }}{% endif %}
 {% if min_stipend_hint %}**Stipend hint:** {{ min_stipend_hint }}{% endif %}
-{% if require_email %}**Email required:** only include professors whose email is findable{% endif %}
-{% if prefer_international_lab %}**Lab preference:** prefer labs known to have international students{% endif %}
+{% if require_email %}**Email required:** HARD CONSTRAINT. Only include professors whose direct email address is findable on a faculty, department, lab, or university profile page.{% endif %}
+{% if prefer_international_lab %}**Lab preference:** actively prefer labs with visible international students, alumni, collaborators, or admissions language welcoming international applicants.{% endif %}
 **Max per university:** {% if max_per_university and max_per_university > 0 %}{{ max_per_university }}{% else %}no limit (include every relevant professor at each university){% endif %}
 {% if target_departments %}**Target departments:** {{ target_departments }} — restrict to professors affiliated with these departments / schools / institutes{% endif %}
 
@@ -75,18 +76,25 @@ different universities, and less obvious matches in this batch.
 
 ## Task
 
+{% if full_coverage_discovery %}
+Find every strong potential professor you can for this profile, returning up to **{{ count or 10 }}** new professors in this batch.
+{% else %}
 Find **{{ count or 10 }}** new professors worldwide whose research is the strongest match for this profile.
+{% endif %}
 {% if discovery_batch and discovery_total_batches %}
 This is one batch in a larger discovery pass, not the final universe of possible matches. If the obvious matches are already excluded, broaden to adjacent universities, labs, departments, and keywords while preserving match quality.
 {% endif %}
+- There is no per-university cap. If one university has many excellent matches, include all relevant professors there.
 
 For each candidate:
-1. Use WebSearch to locate their faculty page: search `"[name] [university] professor [field]"`
-2. Fetch their profile/lab page to confirm: active publications (within recency limit), lab members, ongoing projects
-3. Check for hiring signals: openings page, "prospective students" section, recent PhD graduates, lab size growth
-4. Confirm affiliation with an R1 or equivalent research university
-{% if funding_type and funding_type != "any" %}5. Look for funding information matching "{{ funding_type }}"{% endif %}
-{% if language_english_only %}5. Verify the university offers programs in English{% endif %}
+- Use WebSearch to locate their faculty page: search `"[name] [university] professor [field]"`
+- Fetch their profile/lab page to confirm: active publications (within recency limit), lab members, ongoing projects
+- Check for hiring signals: openings page, "prospective students" section, recent PhD graduates, lab size growth
+- Confirm affiliation with an R1 or equivalent research university
+{% if require_email %}- Verify a direct professor email. If no direct email is visible after checking faculty, lab, department, and university profile pages, skip the candidate.{% endif %}
+{% if prefer_international_lab %}- Inspect lab people/alumni/admissions pages for international students, international alumni, visiting scholars, or explicit international-applicant language. Use this evidence to rank otherwise similar candidates higher.{% endif %}
+{% if funding_type and funding_type != "any" %}- Look for funding information matching "{{ funding_type }}"{% endif %}
+{% if language_english_only %}- Verify the university offers programs in English{% endif %}
 
 **Search guidelines:**
 - Prioritise thematic overlap — not just keyword matching or field name
@@ -95,6 +103,8 @@ For each candidate:
 {% if position_type %}- Prefer professors who have supervised students in the target position type ({{ position_type }}){% endif %}
 - Interdisciplinary profiles → cast a wider net across adjacent departments
 - If required countries / regions are provided, verify the university location before returning the professor
+{% if require_email %}- Do not return candidates with `"email": null`; the email requirement is enabled.{% endif %}
+{% if prefer_international_lab %}- Prefer international-friendly labs and mention the visible evidence in `hiring_notes` or `contact_instructions` when available.{% endif %}
 - Be honest: if you cannot confirm a match or the page is unavailable, skip
 
 ---
@@ -110,7 +120,7 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
       "university": "...",
       "country": "...",
       "dept_lab": "... or null",
-      "email": "... or null",
+      "email": "{% if require_email %}direct professor email address{% else %}... or null{% endif %}",
       "profile_url": "... or null",
       "lab_url": "... or null",
       "scholar_url": "... or null",
@@ -130,7 +140,7 @@ Return ONLY valid JSON — no commentary, no markdown fences around the JSON:
 Field notes:
 - `country`: the country where the university is located; required when target countries / regions are provided
 - `dept_lab`: department, lab, or research group if visible
-- `email`: direct professor email if visible; null if not found quickly
+- `email`: {% if require_email %}required direct professor email address; skip the candidate if it cannot be found{% else %}direct professor email if visible; null if not found quickly{% endif %}
 - `research_summary`: factual summary from the profile/lab page, not generic field knowledge
 - `match_score` 0–100: how well research aligns with the applicant's profile
 - `hiring_signals`: true = clearly accepting students, false = closed, null = unclear

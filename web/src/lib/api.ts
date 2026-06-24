@@ -100,39 +100,11 @@ export type DesktopStatus = {
   data_dir: string
   db_path: string
   documents_dir: string
-  providers: {
-    selected_default: string
-    active: string | null
-    claude_cli: { available: boolean; path: string | null }
-    codex_cli: { available: boolean; path: string | null }
-    anthropic_api: { configured: boolean }
-    openai_api: { configured: boolean }
-  }
 }
 
-export type AiProvidersStatus = DesktopStatus['providers']
-
-export type ProviderSetupProvider = {
-  provider: 'claude_cli' | 'codex_cli'
-  label: string
-  installed: boolean
-  path: string | null
-  version: string | null
-  authenticated: boolean | null
-  account: string | null
-  auth_method: string | null
-  message: string
-  can_install: boolean
-  can_login: boolean
-  install_url: string
-}
-
-export type ProviderSetupStatus = {
-  platform: string
-  providers: {
-    claude_cli: ProviderSetupProvider
-    codex_cli: ProviderSetupProvider
-  }
+export type AuthStatus = {
+  authenticated: boolean
+  username: string
 }
 
 export type Draft = {
@@ -262,6 +234,144 @@ export type DocumentRow = {
   version: number
   has_text: boolean
   text_chars: number
+  created_at: string
+  updated_at: string
+}
+
+export type DiscoveryRun = {
+  id: number
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  phase: string
+  position_type: string | null
+  target_countries: string[] | null
+  target_departments: string[] | null
+  filters: Record<string, any> | null
+  universities_total: number
+  universities_checked: number
+  departments_found: number
+  directory_pages_found: number
+  pages_crawled: number
+  candidates_extracted: number
+  candidates_verified: number
+  candidates_rejected: number
+  professors_saved: number
+  failures: number
+  summary: string | null
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  updated_at: string
+}
+
+export type DiscoveryLog = {
+  id: number
+  run_id: number
+  level: string
+  stage: string | null
+  message: string
+  payload: Record<string, any> | null
+  created_at: string | null
+}
+
+export type DiscoveryCoverage = {
+  active_run: DiscoveryRun | null
+  latest_run: DiscoveryRun | null
+  totals: Record<string, number>
+  recent_logs: DiscoveryLog[]
+}
+
+export type DiscoveryUniversity = {
+  id: number
+  run_id: number
+  name: string
+  normalized_name: string
+  country: string
+  country_code: string | null
+  region: string | null
+  official_domain: string | null
+  official_url: string | null
+  source: string | null
+  source_url: string | null
+  source_confidence: number | null
+  status: string
+  error_message: string | null
+  discovered_at: string | null
+  checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type DiscoveryDepartment = {
+  id: number
+  run_id: number
+  university_id: number
+  name: string
+  normalized_name: string
+  school: string | null
+  url: string | null
+  domain: string | null
+  source: string | null
+  relevance_keywords: string[] | null
+  status: string
+  error_message: string | null
+  discovered_at: string | null
+  crawled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type DiscoveryPage = {
+  id: number
+  run_id: number
+  university_id: number | null
+  department_id: number | null
+  url: string
+  normalized_url: string
+  final_url: string | null
+  page_type: string
+  status: string
+  depth: number
+  fetcher: string | null
+  http_status: number | null
+  content_hash: string | null
+  title: string | null
+  discovered_from_url: string | null
+  extracted_count: number
+  error_message: string | null
+  first_seen_at: string | null
+  last_crawled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type DiscoveryCandidate = {
+  id: number
+  run_id: number
+  university_id: number | null
+  department_id: number | null
+  source_page_id: number | null
+  professor_id: number | null
+  name: string
+  normalized_name: string
+  title: string | null
+  rank: string | null
+  university_name: string | null
+  country: string | null
+  dept_lab: string | null
+  email: string | null
+  profile_url: string | null
+  lab_url: string | null
+  scholar_url: string | null
+  research_text: string | null
+  evidence_summary: string | null
+  raw_payload: Record<string, any> | null
+  extraction_confidence: number | null
+  verification_status: string
+  rejection_reason: string | null
+  match_score: number | null
+  matched_reasons: string[] | null
+  scored_at: string | null
   created_at: string
   updated_at: string
 }
@@ -520,6 +630,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       r = await fetch(apiUrl(path), {
         ...init,
+        credentials: 'include',
         headers: {
           ...(method === 'GET' || method === 'HEAD' ? {} : { 'Content-Type': 'application/json' }),
           ...(init?.headers || {}),
@@ -545,6 +656,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>('/api/auth/status'),
+  login: (username: string, password: string) =>
+    request<{ ok: boolean; username: string }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   health: () => request<{ ok: boolean; time: string }>('/api/health'),
   stats: () => request<Stats>('/api/stats'),
   professors: (params?: { q?: string; status?: string; tier?: string; category?: string }) => {
@@ -567,7 +685,7 @@ export const api = {
   patchDraft: (id: number, patch: { subject?: string; body?: string; attachment_doc_ids?: number[] | null }) =>
     request<Draft>(`/api/drafts/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteDraft: (id: number) =>
-    fetch(apiUrl(`/api/drafts/${id}`), { method: 'DELETE' }).then((r) => {
+    fetch(apiUrl(`/api/drafts/${id}`), { method: 'DELETE', credentials: 'include' }).then((r) => {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText} · /api/drafts/${id}`)
     }),
   grants: () => request<Grant[]>('/api/grants'),
@@ -619,7 +737,7 @@ export const api = {
   patchProfessor: (id: number, patch: Record<string, any>) =>
     request<Professor>(`/api/professors/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteProfessor: (id: number) =>
-    fetch(apiUrl(`/api/professors/${id}`), { method: 'DELETE' }).then((r) => {
+    fetch(apiUrl(`/api/professors/${id}`), { method: 'DELETE', credentials: 'include' }).then((r) => {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText} · /api/professors/${id}`)
     }),
   uploadDraftAttachment: async (draftId: number, file: File): Promise<{
@@ -627,7 +745,7 @@ export const api = {
   }> => {
     const fd = new FormData()
     fd.append('file', file)
-    const r = await fetch(apiUrl(`/api/drafts/${draftId}/upload-attachment`), { method: 'POST', body: fd })
+    const r = await fetch(apiUrl(`/api/drafts/${draftId}/upload-attachment`), { method: 'POST', body: fd, credentials: 'include' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText} on attachment upload`)
     return r.json()
   },
@@ -646,7 +764,7 @@ export const api = {
     fd.append('title', file.name)
     fd.append('is_default', isDefault ? 'true' : 'false')
     fd.append('file', file)
-    const r = await fetch(apiUrl('/api/documents'), { method: 'POST', body: fd })
+    const r = await fetch(apiUrl('/api/documents'), { method: 'POST', body: fd, credentials: 'include' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText} on upload`)
     return r.json() as Promise<DocumentRow>
   },
@@ -655,7 +773,7 @@ export const api = {
       method: 'PATCH', body: JSON.stringify({ is_default: true }),
     }),
   deleteDocument: async (id: number) => {
-    const r = await fetch(apiUrl(`/api/documents/${id}`), { method: 'DELETE' })
+    const r = await fetch(apiUrl(`/api/documents/${id}`), { method: 'DELETE', credentials: 'include' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText} on delete`)
   },
   calendarEvents: (from?: string, to?: string) => {
@@ -670,10 +788,38 @@ export const api = {
   updateCalendarEvent: (id: number, patch: Partial<Omit<CalendarEvent, 'id' | 'created_at' | 'updated_at'>>) =>
     request<CalendarEvent>(`/api/calendar/events/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteCalendarEvent: async (id: number) => {
-    const r = await fetch(apiUrl(`/api/calendar/events/${id}`), { method: 'DELETE' })
+    const r = await fetch(apiUrl(`/api/calendar/events/${id}`), { method: 'DELETE', credentials: 'include' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
   activity: (limit = 100) => request<Activity[]>(`/api/activity?limit=${limit}`),
+  discoveryCoverage: () => request<DiscoveryCoverage>('/api/discovery/coverage'),
+  startDiscoveryRun: (payload: {
+    position_type?: string
+    target_countries: string | string[]
+    target_departments?: string | string[]
+    filters?: Record<string, any>
+  }) =>
+    request<DiscoveryRun>('/api/discovery/runs', { method: 'POST', body: JSON.stringify(payload) }),
+  discoveryRun: (id: number) => request<DiscoveryRun>(`/api/discovery/runs/${id}`),
+  discoveryUniversities: (id: number) =>
+    request<DiscoveryUniversity[]>(`/api/discovery/runs/${id}/universities`),
+  seedDiscoveryPages: (id: number) =>
+    request<DiscoveryRun>(`/api/discovery/runs/${id}/seed-pages`, { method: 'POST' }),
+  discoveryDepartments: (id: number) =>
+    request<DiscoveryDepartment[]>(`/api/discovery/runs/${id}/departments`),
+  discoveryPages: (id: number) => request<DiscoveryPage[]>(`/api/discovery/runs/${id}/pages`),
+  extractDiscoveryCandidates: (id: number) =>
+    request<DiscoveryRun>(`/api/discovery/runs/${id}/extract-candidates`, { method: 'POST' }),
+  discoveryCandidates: (id: number) =>
+    request<DiscoveryCandidate[]>(`/api/discovery/runs/${id}/candidates`),
+  verifyDiscoveryCandidates: (id: number) =>
+    request<{ updated: number; verified: number; rejected: number }>(`/api/discovery/runs/${id}/verify-candidates`, { method: 'POST' }),
+  promoteDiscoveryCandidate: (id: number) =>
+    request<Professor>(`/api/discovery/candidates/${id}/promote`, { method: 'POST' }),
+  promoteVerifiedDiscoveryCandidates: (id: number) =>
+    request<Professor[]>(`/api/discovery/runs/${id}/promote-verified`, { method: 'POST' }),
+  rejectDiscoveryCandidate: (id: number) =>
+    request<DiscoveryCandidate>(`/api/discovery/candidates/${id}/reject`, { method: 'POST' }),
   aiRuns: (limit = 100) => request<AIRun[]>(`/api/ai/runs?limit=${limit}`),
   retryAiRun: (id: number, useFallbackProvider = false) =>
     request<AIRun>(`/api/ai/runs/${id}/retry`, {
@@ -682,13 +828,6 @@ export const api = {
     }),
   recoverStaleAiRuns: () =>
     request<{ updated: number }>('/api/ai/recover-stale-runs', { method: 'POST' }),
-  aiProviders: () => request<AiProvidersStatus>('/api/ai/providers'),
-  providerSetupStatus: () => request<ProviderSetupStatus>('/api/ai/provider-setup'),
-  providerSetupAction: (provider: 'claude_cli' | 'codex_cli', action: 'install' | 'login') =>
-    request<{ ok: boolean; provider: string; action: string; message: string }>('/api/ai/provider-setup', {
-      method: 'POST',
-      body: JSON.stringify({ provider, action }),
-    }),
   desktopStatus: () => request<DesktopStatus>('/api/desktop/status'),
   profile: () => request<UserProfile>('/api/profile'),
   patchProfile: (payload: Partial<UserProfile>) =>
@@ -697,6 +836,8 @@ export const api = {
   user: () => request<UserProfileFull>('/api/user'),
   patchUser: (payload: Partial<UserProfileFull>) =>
     request<UserProfileFull>('/api/user', { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteUserProfileData: () =>
+    request<UserProfileFull>('/api/user', { method: 'DELETE' }),
   verifyUserField: (field: string) =>
     request<any>(`/api/user/field/${encodeURIComponent(field)}/verify`, { method: 'POST' }),
   // Repeatable CRUD — generic helpers for each child kind.
@@ -705,7 +846,7 @@ export const api = {
   patchUserItem: <T,>(kind: 'education' | 'publications' | 'experience' | 'awards' | 'references', id: number, payload: any) =>
     request<T>(`/api/user/${kind}/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteUserItem: async (kind: 'education' | 'publications' | 'experience' | 'awards' | 'references', id: number) => {
-    const r = await fetch(apiUrl(`/api/user/${kind}/${id}`), { method: 'DELETE' })
+    const r = await fetch(apiUrl(`/api/user/${kind}/${id}`), { method: 'DELETE', credentials: 'include' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
   reorderUserItems: (kind: 'education' | 'publications' | 'experience' | 'awards' | 'references', order: number[]) =>
@@ -714,6 +855,7 @@ export const api = {
     const r = await fetch(apiUrl('/api/user/extract'), {
       method: 'POST',
       headers: { 'Accept': 'text/event-stream' },
+      credentials: 'include',
     })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
     if (!r.body) throw new Error('Profile extraction failed: no response stream')

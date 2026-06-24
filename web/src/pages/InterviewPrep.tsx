@@ -146,9 +146,6 @@ export function InterviewPrep() {
           <h1 className="mt-1 text-[31px] font-bold leading-tight" style={{ color: 'var(--color-ink)' }}>
             Interview board
           </h1>
-          <p className="mt-1 max-w-3xl text-[14px] leading-6" style={{ color: 'var(--color-muted)' }}>
-            {prepStats.active} active prep{prepStats.active === 1 ? '' : 's'}, {prepStats.scheduled} scheduled meeting{prepStats.scheduled === 1 ? '' : 's'}, and {prepStats.ready} ready briefing{prepStats.ready === 1 ? '' : 's'}.
-          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <StatusPill label={generating ? 'Generating' : err ? 'Needs review' : 'Live'} tone={err ? 'amber' : 'green'} />

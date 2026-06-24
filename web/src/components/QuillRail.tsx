@@ -1,13 +1,13 @@
 import {
   History, Paperclip, ArrowUp, Square,
   CheckCircle2, Loader, AlertCircle, ChevronDown, ChevronRight,
-  CircleDot, Database, FileText, Mail, WandSparkles,
+  Database, FileText, Mail, WandSparkles,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { fetchProviders, runQuill, type ProvidersStatus, type QuillEvent } from '@/lib/quill'
-import { api } from '@/lib/api'
+import { runQuill, type QuillEvent } from '@/lib/quill'
 import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
 type Role = 'user' | 'assistant'
@@ -33,8 +33,6 @@ type ToolCall = {
   result?: any
 }
 
-type QuillProvider = 'claude_cli' | 'codex_cli'
-
 const REVEAL_INTERVAL_MS = 35
 
 const BOOT_MSG: Message = {
@@ -50,6 +48,37 @@ const QUICK_PROMPTS = [
   { label: 'Find gaps', icon: Database, text: 'Scan the dashboard data and summarize the biggest gaps in my application pipeline.' },
   { label: 'Improve profile', icon: FileText, text: 'Review my profile signals and suggest concrete improvements for professor matching.' },
 ]
+
+const markdownComponents: Components = {
+  a({ href, children }) {
+    const safeHref = href && /^(https?:|mailto:|\/|#)/i.test(href) ? href : undefined
+    return (
+      <a href={safeHref} target={safeHref?.startsWith('http') ? '_blank' : undefined} rel="noreferrer">
+        {children}
+      </a>
+    )
+  },
+  code({ className, children, ...props }) {
+    const text = String(children ?? '')
+    const isBlock = text.includes('\n') || Boolean(className)
+    return isBlock ? (
+      <code className={className} {...props}>{children}</code>
+    ) : (
+      <code {...props}>{children}</code>
+    )
+  },
+  table({ children }) {
+    return (
+      <div className="quill-md-table-wrap">
+        <table>{children}</table>
+      </div>
+    )
+  },
+  img({ src, alt }) {
+    if (!src) return null
+    return <img src={src} alt={alt || ''} loading="lazy" />
+  },
+}
 
 function loadMessages(): Message[] {
   try {
@@ -72,26 +101,11 @@ function saveMessages(msgs: Message[]) {
   } catch {}
 }
 
-function loadProvider(): QuillProvider {
-  try {
-    const saved = localStorage.getItem('quill-provider')
-    if (saved === 'codex_cli' || saved === 'claude_cli') return saved
-  } catch {}
-  return 'claude_cli'
-}
-
-function isQuillProvider(provider: string | null | undefined): provider is QuillProvider {
-  return provider === 'claude_cli' || provider === 'codex_cli'
-}
-
 export function QuillRail() {
   const [text, setText] = useState('')
   const [messages, setMessages] = useState<Message[]>(loadMessages)
   const [running, setRunning] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const [providers, setProviders] = useState<ProvidersStatus | null>(null)
-  const [providerError, setProviderError] = useState<string | null>(null)
-  const [selectedProvider, setSelectedProvider] = useState<QuillProvider>(loadProvider)
   const abortRef = useRef<AbortController | null>(null)
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const revealRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -99,6 +113,7 @@ export function QuillRail() {
   const pendingDoneRef = useRef<Map<string, QuillEvent>>(new Map())
   const bodyRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const pinnedToBottomRef = useRef(true)
 
   // Persist history to localStorage whenever messages change.
   useEffect(() => { saveMessages(messages) }, [messages])
@@ -109,53 +124,14 @@ export function QuillRail() {
     }
   }, [])
 
+  // Auto-scroll only while the user is already near the bottom.
   useEffect(() => {
-    let cancelled = false
-    const refreshProviders = () => {
-      fetchProviders()
-      .then((status) => {
-        if (cancelled) return
-        setProviders(status)
-        setProviderError(null)
-        const backendProvider = isQuillProvider(status.active)
-          ? status.active
-          : isQuillProvider(status.selected_default)
-            ? status.selected_default
-            : null
-        const claudeReady = status.claude_cli.available
-        const codexReady = status.codex_cli.available
-        setSelectedProvider((current) => {
-          if (backendProvider === 'claude_cli' && claudeReady) return backendProvider
-          if (backendProvider === 'codex_cli' && codexReady) return backendProvider
-          if (current === 'claude_cli' && claudeReady) return current
-          if (current === 'codex_cli' && codexReady) return current
-          if (claudeReady) return 'claude_cli'
-          if (codexReady) return 'codex_cli'
-          return current
-        })
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setProviderError(e?.message || String(e))
-      })
-    }
-
-    refreshProviders()
-    const interval = window.setInterval(refreshProviders, 3000)
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [])
-
-  useEffect(() => {
-    try { localStorage.setItem('quill-provider', selectedProvider) } catch {}
-  }, [selectedProvider])
-
-  // Auto-scroll to bottom when content grows.
-  useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages])
+    const el = bodyRef.current
+    if (!el || (!pinnedToBottomRef.current && !running)) return
+    window.requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: running ? 'auto' : 'smooth' })
+    })
+  }, [messages, running])
 
   // Auto-grow textarea.
   useEffect(() => {
@@ -201,7 +177,6 @@ export function QuillRail() {
         {
           workflow: 'chat',
           params: { message: msg, history: priorHistory },
-          preferred_provider: selectedProvider,
           max_turns: 30,
           timeout_s: 120,
         },
@@ -287,18 +262,6 @@ export function QuillRail() {
     }
   }
 
-  async function selectProvider(provider: QuillProvider) {
-    setSelectedProvider(provider)
-    try {
-      await api.patchSettings({ ai_provider: provider })
-      const status = await fetchProviders()
-      setProviders(status)
-      setProviderError(null)
-    } catch (e: any) {
-      setProviderError(e?.message || String(e))
-    }
-  }
-
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter inserts a newline; Cmd/Ctrl+Enter still sends
     // (so muscle memory keeps working for anyone used to chat apps).
@@ -362,19 +325,23 @@ export function QuillRail() {
         </div>
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <StatusPill running={running} elapsed={elapsed} />
-          <ProviderSelect
-            providers={providers}
-            error={providerError}
-            selected={selectedProvider}
-            onSelect={selectProvider}
-            disabled={running}
-          />
         </div>
       </header>
 
-      <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3 text-[15px]">
+      <div
+        ref={bodyRef}
+        tabIndex={0}
+        aria-label="Quill conversation"
+        onScroll={(event) => {
+          const el = event.currentTarget
+          pinnedToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 72
+        }}
+        onWheelCapture={(event) => event.stopPropagation()}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3 text-[15px] focus:outline-none"
+        style={{ scrollbarGutter: 'stable' }}
+      >
         {messages.map((m) => (
-          <MessageView key={m.id} msg={m} currentProvider={selectedProvider} />
+          <MessageView key={m.id} msg={m} />
         ))}
       </div>
 
@@ -476,81 +443,11 @@ function StatusPill({ running, elapsed }: { running: boolean; elapsed: number })
   )
 }
 
-function ProviderSelect({
-  providers,
-  error,
-  selected,
-  onSelect,
-  disabled,
-}: {
-  providers: ProvidersStatus | null
-  error: string | null
-  selected: QuillProvider
-  onSelect: (provider: QuillProvider) => void
-  disabled: boolean
-}) {
-  if (providers) {
-    const options: { value: QuillProvider; label: string; available: boolean }[] = [
-      { value: 'claude_cli', label: 'Claude', available: providers.claude_cli.available },
-      { value: 'codex_cli', label: 'Codex', available: providers.codex_cli.available },
-    ]
-    return (
-      <div
-        className="inline-flex overflow-hidden rounded-full border p-0.5"
-        style={{ background: 'var(--color-paper-2)', borderColor: 'var(--color-line)' }}
-        aria-label="Quill provider"
-      >
-        {options.map((option) => {
-          const active = selected === option.value
-          return (
-            <button
-              key={option.value}
-              type="button"
-              disabled={disabled || !option.available}
-              onClick={() => onSelect(option.value)}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-              style={{
-                background: active ? 'var(--color-white)' : 'transparent',
-                color: active ? 'var(--color-green-700)' : 'var(--color-muted)',
-                boxShadow: active ? '0 1px 2px rgba(17,24,39,0.08)' : 'none',
-              }}
-              title={option.available ? `Use ${option.label} for Quill` : `${option.label} CLI not detected`}
-            >
-              <CircleDot size={10} />
-              {option.label}
-            </button>
-          )
-        })}
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
-        title={error}
-        style={{ background: 'var(--color-amber-50)', color: 'var(--color-amber-700)', borderColor: 'var(--color-line)' }}>
-        <Loader size={10} className="animate-spin" />
-        provider
-      </span>
-    )
-  }
-  if (!providers) {
-    return (
-      <span className="rounded-full border px-2 py-0.5 text-[11px] inline-flex items-center gap-1"
-        style={{ background: 'var(--color-paper)', color: 'var(--color-muted)', borderColor: 'var(--color-line)' }}>
-        <Loader size={10} className="animate-spin" />
-        provider
-      </span>
-    )
-  }
-}
-
-function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: QuillProvider }) {
+function MessageView({ msg }: { msg: Message }) {
   if (msg.role === 'user') {
     return (
       <div
-        className="self-end max-w-[88%] rounded-md border px-3 py-2 text-[14px] leading-relaxed animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both]"
+        className="shrink-0 self-end max-w-[88%] min-w-0 break-words rounded-md border px-3 py-2 text-[14px] leading-relaxed animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both]"
         style={{ background: 'var(--color-ink)', color: 'white', borderColor: 'var(--color-ink)' }}
       >
         {msg.text}
@@ -559,17 +456,11 @@ function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: 
   }
 
   return (
-    <div className="animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both] rounded-md border px-3 py-2.5"
+    <div className="shrink-0 min-w-0 max-w-full overflow-hidden animate-[qMsgIn_420ms_cubic-bezier(0.2,0.8,0.2,1)_both] rounded-md border px-3 py-2.5"
       style={{ background: 'color-mix(in srgb, var(--color-white) 94%, var(--color-paper))', borderColor: 'var(--color-line)' }}>
       <div className="flex items-center gap-1.5 text-[11px] font-mono mb-1.5" style={{ color: 'var(--color-muted)' }}>
         <WandSparkles size={11} style={{ color: 'var(--color-amber-600)' }} />
         <span>Quill</span>
-        {msg.meta?.provider && (
-          <span>
-            via {msg.meta.provider}
-            {msg.meta.provider !== currentProvider ? ' (previous provider)' : ''}
-          </span>
-        )}
         {msg.meta?.cost !== undefined && <span>${msg.meta.cost.toFixed(4)}</span>}
         {msg.meta?.durationMs !== undefined && <span>{(msg.meta.durationMs / 1000).toFixed(1)}s</span>}
       </div>
@@ -579,10 +470,12 @@ function MessageView({ msg, currentProvider }: { msg: Message; currentProvider: 
       )}
 
       <div
-        className={`quill-md text-[14px] leading-[1.58] ${msg.done ? '' : 'q-cursor'}`}
+        className={`quill-md min-w-0 max-w-full text-[14px] leading-[1.58] ${msg.done ? '' : 'q-cursor'}`}
         style={{ color: 'var(--color-ink-soft)' }}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{prepareMarkdown(msg.text)}</ReactMarkdown>
+        <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>
+          {prepareMarkdown(msg.text)}
+        </ReactMarkdown>
       </div>
 
       {msg.error && (
@@ -659,13 +552,22 @@ function ToolActivity({ tools, done }: { tools: ToolCall[]; done: boolean }) {
   )
 }
 
-// Keep model output renderable as Markdown while fixing a common streaming
-// artifact: separate assistant chunks can arrive as "sentence.Next sentence".
+// Keep model output renderable as Markdown while fixing common model/streaming
+// artifacts: chunks can arrive as "sentence.Next sentence", and models often
+// compress sections into "*Section:* 7. Item 8. Item" instead of real lists.
 function prepareMarkdown(text: string): string {
   if (!text) return text
   return text
+    .replace(/\r\n/g, '\n')
+    .replace(/([^\n])(```)/g, '$1\n$2')
+    .replace(/(```[^\n]*\n[\s\S]*?\n```)(?=\S)/g, '$1\n\n')
+    .replace(/(^|\n)\*([^*\n:]{2,80}):\*\s+(?=\d{1,3}\.\s)/g, '$1**$2:**\n\n')
+    .replace(/(^|\n)_([^_\n:]{2,80}):_\s+(?=\d{1,3}\.\s)/g, '$1**$2:**\n\n')
+    .replace(/([^\n])[ \t]+(\d{1,3})\.\s+(?=(?:"|“|[A-Z][^.\n]{2,}))/g, '$1\n$2. ')
+    .replace(/([^\n])[ \t]+([-*+])\s+(?=\S)/g, '$1\n$2 ')
     .replace(/([.!?])(?=[A-Z0-9])/g, '$1\n\n')
     .replace(/(:)(?=-\s|\*\s|\d+\.\s)/g, '$1\n')
+    .replace(/\n{3,}/g, '\n\n')
 }
 
 function toolArg(input: any): string {
@@ -708,7 +610,7 @@ function applyEvent(aiId: string, evt: QuillEvent, setMessages: SetMessages) {
       if (m.id !== aiId) return m
       switch (evt.kind) {
         case 'run_id': {
-          return { ...m, meta: { ...(m.meta || { ts: Date.now() }), runId: evt.data.id, provider: evt.data.provider } }
+          return { ...m, meta: { ...(m.meta || { ts: Date.now() }), runId: evt.data.id } }
         }
         case 'started':
           return m

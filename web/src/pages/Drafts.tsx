@@ -216,7 +216,7 @@ export function Drafts() {
     if (!ok) return
     setBusyAction(`mark-${draft.id}`)
     try {
-      await fetch(apiUrl(`/api/drafts/${draft.id}/mark_sent`), { method: 'POST' })
+      await fetch(apiUrl(`/api/drafts/${draft.id}/mark_sent`), { method: 'POST', credentials: 'include' })
       setToastTimed({ ok: true, text: draft.professor_name ? `Marked ${draft.professor_name} as sent.` : 'Marked as sent.' })
       reload()
     } catch (e) {
@@ -336,9 +336,6 @@ export function Drafts() {
             <h1 className="text-[31px] leading-none font-bold tracking-tight mt-1" style={{ color: 'var(--color-ink)' }}>
               Drafts
             </h1>
-            <p className="text-[13px] mt-1 max-w-full sm:max-w-[560px] leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
-              Review, revise, attach files, and send outreach drafts.
-            </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             {gmailConnected ? (

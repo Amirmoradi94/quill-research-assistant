@@ -23,7 +23,9 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
+
+import httpx
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -50,16 +52,22 @@ class Provider(str, Enum):
     CODEX_CLI     = "codex_cli"
     ANTHROPIC_API = "anthropic_api"
     OPENAI_API    = "openai_api"
+    OPENROUTER_API = "openrouter_api"
 
 
 FALLBACK_CHAIN: tuple[Provider, ...] = (
+    Provider.OPENROUTER_API,
     Provider.CLAUDE_CLI,
     Provider.CODEX_CLI,
     Provider.ANTHROPIC_API,
     Provider.OPENAI_API,
 )
 
+DEFAULT_OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "z-ai/glm-5.2")
+
 CLAUDE_NONINTERACTIVE_PERMISSION_ARGS = ["--permission-mode", "bypassPermissions"]
+
+ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 def resolve_cli_path(command: str, configured_path: str | None = None) -> str | None:
@@ -122,6 +130,9 @@ class RunRequest:
     grant_id: int | None = None
     cwd: str | None = None
     allowed_tools: list[str] | None = None
+    openrouter_tools: list[dict[str, Any]] | None = None
+    openrouter_tool_aliases: dict[str, str] | None = None
+    tool_executor: ToolExecutor | None = None
     max_turns: int = 30
     timeout_s: int = 300
 
@@ -157,6 +168,7 @@ def select_provider(
     codex_cli_path: str | None = None,
     anthropic_api_key: str | None = None,
     openai_api_key: str | None = None,
+    openrouter_api_key: str | None = None,
 ) -> Provider | None:
     """Return the first available provider, walking the fallback chain.
 
@@ -181,6 +193,9 @@ def select_provider(
                 return p
         elif p == Provider.OPENAI_API:
             if openai_api_key:
+                return p
+        elif p == Provider.OPENROUTER_API:
+            if openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"):
                 return p
     return None
 
@@ -392,6 +407,250 @@ def parse_codex_event(raw_line: str) -> StreamEvent | None:
     return None
 
 
+def _normalise_openrouter_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
+    usage = usage or {}
+    return {
+        "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
+        "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
+        "raw": usage,
+    }
+
+
+def _openrouter_headers(api_key: str, env: dict[str, str] | None = None) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": (env or {}).get("OPENROUTER_HTTP_REFERER", "http://localhost:8000"),
+        "X-OpenRouter-Title": (env or {}).get("OPENROUTER_TITLE", "Quill AI"),
+    }
+
+
+async def _post_openrouter_chat(
+    client: httpx.AsyncClient,
+    *,
+    body: dict[str, Any],
+    headers: dict[str, str],
+) -> dict[str, Any] | StreamEvent:
+    response = await client.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json=body,
+        headers=headers,
+    )
+    if response.status_code >= 400:
+        detail = response.text
+        return StreamEvent(
+            kind="error",
+            data={
+                "message": f"OpenRouter request failed with HTTP {response.status_code}.",
+                "raw_error": detail[-2000:],
+            },
+        )
+    return response.json()
+
+
+async def stream_openrouter_agent(prompt: str, request: RunRequest, env: dict[str, str] | None = None) -> AsyncIterator[StreamEvent]:
+    api_key = (env or {}).get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        yield StreamEvent(kind="error", data={"message": "OpenRouter API key is not configured."})
+        return
+
+    model = (env or {}).get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL
+    tools = request.openrouter_tools or []
+    if not tools or request.tool_executor is None:
+        async for evt in stream_openrouter_text(prompt, request, env=env):
+            yield evt
+        return
+
+    headers = _openrouter_headers(api_key, env)
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    full_text_parts: list[str] = []
+    total_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    yield StreamEvent(kind="started", data={"provider": Provider.OPENROUTER_API.value, "model": model, "tools": True})
+
+    try:
+        async with httpx.AsyncClient(timeout=request.timeout_s) as client:
+            for _turn in range(max(1, min(request.max_turns, 30))):
+                body = {
+                    "model": model,
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                    "stream": False,
+                }
+                payload = await _post_openrouter_chat(client, body=body, headers=headers)
+                if isinstance(payload, StreamEvent):
+                    yield payload
+                    return
+
+                usage = _normalise_openrouter_usage(payload.get("usage"))
+                for key in ("input_tokens", "output_tokens"):
+                    if isinstance(usage.get(key), int):
+                        total_usage[key] += usage[key]
+
+                choice = (payload.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                tool_calls = message.get("tool_calls") or []
+                content = message.get("content") or ""
+
+                if not tool_calls:
+                    if content:
+                        content = scrub_house_style(content)
+                        full_text_parts.append(content)
+                        yield StreamEvent(kind="text", data={"text": content})
+                    yield StreamEvent(
+                        kind="done",
+                        data={
+                            "ok": True,
+                            "result": "".join(full_text_parts),
+                            "usage": total_usage,
+                        },
+                    )
+                    payload = extract_json_payload("".join(full_text_parts))
+                    if payload is not None:
+                        yield StreamEvent(kind="parsed", data={"payload": payload})
+                    return
+
+                assistant_message = {
+                    "role": "assistant",
+                    "content": content if content else None,
+                    "tool_calls": tool_calls,
+                }
+                messages.append(assistant_message)
+
+                for tool_call in tool_calls:
+                    function = tool_call.get("function") or {}
+                    tool_name = function.get("name") or ""
+                    raw_args = function.get("arguments") or "{}"
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except json.JSONDecodeError:
+                        args = {"_invalid_arguments": raw_args}
+                    if not isinstance(args, dict):
+                        args = {"value": args}
+
+                    display_name = (request.openrouter_tool_aliases or {}).get(tool_name, tool_name)
+                    yield StreamEvent(
+                        kind="tool_call",
+                        data={
+                            "id": tool_call.get("id"),
+                            "name": display_name,
+                            "input": args,
+                        },
+                    )
+
+                    try:
+                        result = await request.tool_executor(tool_name, args)
+                        is_error = not result.get("ok", True)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                        is_error = True
+
+                    yield StreamEvent(
+                        kind="tool_result",
+                        data={
+                            "id": tool_call.get("id"),
+                            "is_error": is_error,
+                            "content": result,
+                        },
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "name": tool_name,
+                        "content": json.dumps(result, default=str),
+                    })
+
+        yield StreamEvent(kind="error", data={"message": "OpenRouter tool loop reached the maximum number of turns."})
+    except httpx.TimeoutException:
+        yield StreamEvent(kind="error", data={"message": "OpenRouter request timed out."})
+    except httpx.HTTPError as exc:
+        yield StreamEvent(kind="error", data={"message": f"OpenRouter request failed: {exc}"})
+
+
+async def stream_openrouter_text(prompt: str, request: RunRequest, env: dict[str, str] | None = None) -> AsyncIterator[StreamEvent]:
+    api_key = (env or {}).get("OPENROUTER_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        yield StreamEvent(kind="error", data={"message": "OpenRouter API key is not configured."})
+        return
+
+    model = (env or {}).get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+    headers = _openrouter_headers(api_key, env)
+
+    yield StreamEvent(kind="started", data={"provider": Provider.OPENROUTER_API.value, "model": model})
+
+    full_text_parts: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=request.timeout_s) as client:
+            async with client.stream(
+                "POST",
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=body,
+                headers=headers,
+            ) as response:
+                if response.status_code >= 400:
+                    detail = await response.aread()
+                    yield StreamEvent(
+                        kind="error",
+                        data={
+                            "message": f"OpenRouter request failed with HTTP {response.status_code}.",
+                            "raw_error": detail.decode("utf-8", errors="replace")[-2000:],
+                        },
+                    )
+                    return
+
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choice = (payload.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    chunk = delta.get("content") or ""
+                    if chunk:
+                        chunk = scrub_house_style(chunk)
+                        full_text_parts.append(chunk)
+                        yield StreamEvent(kind="text", data={"text": chunk})
+
+        usage = {"input_tokens": None, "output_tokens": None}
+        yield StreamEvent(
+            kind="done",
+            data={
+                "ok": True,
+                "result": "".join(full_text_parts),
+                "usage": usage,
+            },
+        )
+        payload = extract_json_payload("".join(full_text_parts))
+        if payload is not None:
+            yield StreamEvent(kind="parsed", data={"payload": payload})
+    except httpx.TimeoutException:
+        yield StreamEvent(kind="error", data={"message": "OpenRouter request timed out."})
+    except httpx.HTTPError as exc:
+        yield StreamEvent(kind="error", data={"message": f"OpenRouter request failed: {exc}"})
+
+
+async def stream_openrouter(prompt: str, request: RunRequest, env: dict[str, str] | None = None) -> AsyncIterator[StreamEvent]:
+    if request.openrouter_tools and request.tool_executor is not None:
+        async for evt in stream_openrouter_agent(prompt, request, env=env):
+            yield evt
+        return
+    async for evt in stream_openrouter_text(prompt, request, env=env):
+        yield evt
+
+
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}\s*$")
 
 
@@ -454,6 +713,10 @@ async def stream(
     elif provider is Provider.CODEX_CLI:
         argv = codex_cli_argv(prompt, cwd=request.cwd, cli_path=cli_path)
         parser = parse_codex_event
+    elif provider is Provider.OPENROUTER_API:
+        async for evt in stream_openrouter(prompt, request, env=env):
+            yield evt
+        return
     else:
         yield StreamEvent(
             kind="error",

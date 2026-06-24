@@ -24,7 +24,6 @@ import {
   type DocumentRow,
   type Draft,
   type Grant,
-  type InterviewPrep,
   type Professor,
   type SentRow,
   type Stats,
@@ -65,7 +64,6 @@ export function Home() {
   const [sent, setSent] = useState<SentRow[]>([])
   const [documents, setDocuments] = useState<DocumentRow[]>([])
   const [events, setEvents] = useState<CalendarEvent[]>([])
-  const [interviews, setInterviews] = useState<InterviewPrep[]>([])
   const [grants, setGrants] = useState<Grant[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -83,7 +81,6 @@ export function Home() {
       api.sent(),
       api.documents(),
       api.calendarEvents(isoDate(), isoDate(30)),
-      api.listInterviewPreps(),
       api.grants(),
     ])
 
@@ -97,7 +94,6 @@ export function Home() {
       sentResult,
       documentsResult,
       eventsResult,
-      interviewsResult,
       grantsResult,
     ] = results
 
@@ -113,7 +109,6 @@ export function Home() {
     if (sentResult.status === 'fulfilled') setSent(sentResult.value)
     if (documentsResult.status === 'fulfilled') setDocuments(documentsResult.value)
     if (eventsResult.status === 'fulfilled') setEvents(eventsResult.value)
-    if (interviewsResult.status === 'fulfilled') setInterviews(interviewsResult.value)
     if (grantsResult.status === 'fulfilled') setGrants(grantsResult.value)
     if (loadedAny) setHasLoadedData(true)
     setErrors(failures)
@@ -145,7 +140,6 @@ export function Home() {
   const sentCount = stats?.sent_count ?? sent.length
   const totalApplications = stats?.total ?? professors.length
   const responseRate = stats?.response_rate ?? (sentCount > 0 ? (replyCount / sentCount) * 100 : 0)
-  const interviewCount = stats?.interview_count ?? interviews.filter((prep) => prep.status !== 'archived').length
   const unreadReplies = sent.reduce((sum, row) => sum + row.replies.filter((reply) => !reply.read_at && !reply.dismissed_at).length, 0)
   const followupsDue = stats?.pending_followups ?? sent.filter((row) => (row.days_since_sent ?? 0) >= 14 && row.reply_count === 0).length
   const initialSync = loading && !hasLoadedData
@@ -157,7 +151,7 @@ export function Home() {
   const statusMessage = initialSync
     ? 'Quill is connecting to the local backend and loading your application data. Counts will appear once the database responds.'
     : backendUnavailable
-      ? 'The local backend is still starting or not reachable. Quill is retrying automatically; use Setup if this does not clear.'
+      ? 'The local backend is still starting or not reachable. Quill is retrying automatically.'
       : partialData
         ? 'Some data sources did not respond. Showing the data that loaded successfully while Quill keeps retrying.'
         : ''
@@ -230,11 +224,6 @@ export function Home() {
             <h1 className="mt-1 text-[31px] font-bold leading-tight" style={{ color: 'var(--color-ink)' }}>
               Application pipeline
             </h1>
-            <p className="mt-1 max-w-3xl text-[14px] leading-6" style={{ color: 'var(--color-muted)' }}>
-              {dataUnavailable
-                ? 'Connecting to the local backend and loading your application pipeline.'
-                : `${sentCount} professors contacted, ${replyCount} replies, ${interviewCount} interview${interviewCount === 1 ? '' : 's'}, and ${drafts.length} drafts still in queue.`}
-            </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <StatusChip label={statusLabel} tone={statusTone} busy={loading || initialSync} />

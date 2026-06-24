@@ -56,7 +56,7 @@ export function AiRuns() {
   const cancelRun = async (id: number) => {
     setCancelling(id)
     try {
-      await fetch(apiUrl(`/api/ai/runs/${id}/cancel`), { method: 'POST' })
+      await fetch(apiUrl(`/api/ai/runs/${id}/cancel`), { method: 'POST', credentials: 'include' })
       load()
     } finally {
       setCancelling(null)
@@ -107,9 +107,6 @@ export function AiRuns() {
               <span className="font-medium text-[14px]" style={{ color: 'var(--color-ink)' }}>
                 {run.workflow.replace(/_/g, ' ')}
               </span>
-              <span className="ml-2 text-[12px]" style={{ color: 'var(--color-muted)' }}>
-                via {run.provider.replace('_cli', ' CLI').replace('_api', ' API')}
-              </span>
               {run.retry_of_run_id && (
                 <span className="ml-2 text-[11px] font-mono" style={{ color: 'var(--color-muted)' }}>
                   retry of #{run.retry_of_run_id}
@@ -136,7 +133,7 @@ export function AiRuns() {
                   disabled={retrying === `${run.id}:same`}
                   className="flex items-center gap-1 rounded border px-2 py-1 text-[12px] transition-colors hover:bg-[color:var(--color-white)]"
                   style={{ borderColor: 'var(--color-line)', color: 'var(--color-ink-soft)' }}
-                  title="Retry with the same provider"
+                  title="Retry this run"
                 >
                   {retrying === `${run.id}:same` ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                   Retry
@@ -146,7 +143,7 @@ export function AiRuns() {
                   disabled={retrying === `${run.id}:fallback`}
                   className="flex items-center gap-1 rounded border px-2 py-1 text-[12px] transition-colors hover:bg-[color:var(--color-white)]"
                   style={{ borderColor: 'var(--color-line)', color: 'var(--color-brand-700)' }}
-                  title="Retry with the next available provider"
+                  title="Retry with fallback handling"
                 >
                   {retrying === `${run.id}:fallback` ? <Loader size={12} className="animate-spin" /> : <Wand2 size={12} />}
                   Fallback
@@ -232,14 +229,14 @@ export function AiRuns() {
           <div>
             <h2 className="text-[17px] font-semibold" style={{ color: 'var(--color-ink)' }}>Recovery Queue</h2>
             <p className="text-[12px]" style={{ color: 'var(--color-muted)' }}>
-              Tasks paused by provider limits stay here until you rerun them or switch to a fallback provider.
+              Tasks paused by AI limits stay here until you rerun them or use fallback handling.
             </p>
           </div>
           <span className="text-[12px] font-mono" style={{ color: 'var(--color-muted)' }}>
             {recoveryRuns.length} task{recoveryRuns.length === 1 ? '' : 's'}
           </span>
         </div>
-        {renderList(recoveryRuns, 'No paused tasks. Provider-limit interruptions will appear here.')}
+        {renderList(recoveryRuns, 'No paused tasks. AI-limit interruptions will appear here.')}
       </section>
 
       <section>

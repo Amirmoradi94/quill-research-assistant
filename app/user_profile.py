@@ -94,6 +94,25 @@ _CHILD_REGISTRY: dict[str, tuple[type, type, type, type]] = {
 }
 
 
+@router.delete("", response_model=schemas.UserProfileOut)
+def delete_profile_data(db: Session = Depends(get_db)):
+    """Clear the singleton user's profile data while keeping the account row."""
+    u = _user(db)
+
+    for Model, *_ in _CHILD_REGISTRY.values():
+        db.query(Model).filter(Model.user_id == u.id).delete(synchronize_session=False)
+
+    for column in models.User.__table__.columns:
+        if column.name in {"id", "created_at", "updated_at"}:
+            continue
+        setattr(u, column.name, "" if column.name == "name" else None)
+
+    u.updated_at = datetime.utcnow()
+    db.commit()
+    db.expire(u)
+    return u
+
+
 def _register_child(kind: str, Model: type, InSchema: type, OutSchema: type) -> None:
     """Register the 4 endpoints for one child kind. Inline closures with
     explicit (non-generic) type annotations so Pydantic can resolve them.

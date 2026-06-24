@@ -148,6 +148,7 @@ export function Professors() {
       await fetch(apiUrl('/api/professors'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(addForm),
       })
       setAddForm({ name: '', university: '', email: '', tier: 'T2', research_category: '', research_angle: '', position_type: 'phd' })
@@ -286,9 +287,6 @@ export function Professors() {
             <h1 className="text-[31px] leading-none font-bold tracking-tight mt-1" style={{ color: 'var(--color-ink)' }}>
               Professors
             </h1>
-            <p className="text-[13px] mt-1 max-w-full sm:max-w-[560px] leading-relaxed break-words" style={{ color: 'var(--color-ink-soft)' }}>
-              Review, score, and move faculty targets through the outreach pipeline.
-            </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <button

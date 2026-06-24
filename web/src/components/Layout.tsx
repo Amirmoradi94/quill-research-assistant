@@ -1,9 +1,8 @@
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet } from 'react-router-dom'
 import { useEffect, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { Sidebar } from './Sidebar'
 import { QuillRail } from './QuillRail'
 import { ConfirmProvider } from './ConfirmDialog'
-import { AppUpdateNotice } from './AppUpdateNotice'
 import { api, type UserProfile } from '@/lib/api'
 import { startReminderNotifications } from '@/lib/desktopNotifications'
 
@@ -26,57 +25,12 @@ function loadRailWidth() {
 export function Layout() {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [quillWidth, setQuillWidth] = useState(loadRailWidth)
-  const navigate = useNavigate()
-  const location = useLocation()
 
   useEffect(() => {
     api.profile().then(setProfile).catch(() => {})
   }, [])
 
   useEffect(() => startReminderNotifications(), [])
-
-  useEffect(() => {
-    if (location.pathname === '/setup') return
-    if (localStorage.getItem('postdoc.setup.completed') === 'true') return
-    if (location.pathname !== '/' && location.pathname !== '/home') return
-
-    let cancelled = false
-    let retry: ReturnType<typeof setTimeout> | null = null
-
-    const checkSetup = () => {
-      Promise.allSettled([
-        api.desktopStatus(),
-        api.documents('cv'),
-        api.profile(),
-      ]).then(([desktopResult, docsResult, profileResult]) => {
-        if (cancelled) return
-        if (
-          desktopResult.status === 'rejected' ||
-          docsResult.status === 'rejected' ||
-          profileResult.status === 'rejected'
-        ) {
-          retry = window.setTimeout(checkSetup, 1500)
-          return
-        }
-        const desktop = desktopResult.value
-        const docs = docsResult.value
-        const p = profileResult.value
-        const hasProvider = !!desktop.providers.active
-        const hasCv = docs.some((doc) => doc.kind === 'cv')
-        const hasProfileName = !!p?.name?.trim()
-        if (!hasProvider || !hasCv || !hasProfileName) {
-          navigate('/setup', { replace: true })
-        }
-      })
-    }
-
-    checkSetup()
-
-    return () => {
-      cancelled = true
-      if (retry) window.clearTimeout(retry)
-    }
-  }, [location.pathname, navigate])
 
   const user = {
     name: profile?.name || 'User',
@@ -135,7 +89,6 @@ export function Layout() {
           <QuillRail />
         </div>
       </div>
-      <AppUpdateNotice />
     </ConfirmProvider>
   )
 }

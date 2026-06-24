@@ -220,7 +220,7 @@ def _run_profile_extraction_silently() -> None:
     from .database import SessionLocal
     from .quill import (
         _settings, _select_provider_for, _resolve_user_context,
-        _run_and_stream, RunRequest, Workflow,
+        _provider_env_for, _run_and_stream, RunRequest, Workflow,
     )
     from ai.runner import resolve_cli_path
 
@@ -255,7 +255,7 @@ def _run_profile_extraction_silently() -> None:
         )
 
         async def drain():
-            async for _ in _run_and_stream(run_id, request, provider, cli_path):
+            async for _ in _run_and_stream(run_id, request, provider, cli_path, _provider_env_for(settings, provider)):
                 pass  # silently consume — _apply_workflow_result updates DB
 
         # If we're inside a running loop, schedule; otherwise create one.

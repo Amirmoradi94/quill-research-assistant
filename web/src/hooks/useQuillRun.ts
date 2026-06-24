@@ -64,6 +64,7 @@ export function useQuillRun() {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           workflow: opts.workflow,
           params: opts.params ?? {},
@@ -102,9 +103,9 @@ export function useQuillRun() {
               if (currentKind === 'run_id') {
                 runIdRef.current = data.id
                 setRunId(data.id)
-                pushEvent('run_id', `Run #${data.id} created`, data.provider ? `Provider: ${data.provider}` : undefined)
+                pushEvent('run_id', `Run #${data.id} created`)
               } else if (currentKind === 'started') {
-                pushEvent('started', 'AI provider started', data.provider)
+                pushEvent('started', 'Quill started')
               } else if (currentKind === 'text' && data.text) {
                 setLines((prev) => {
                   const chunk: string = data.text
@@ -166,7 +167,7 @@ export function useQuillRun() {
     setState('cancelled')
     if (currentRunId) {
       try {
-        await fetch(apiUrl(`/api/ai/runs/${currentRunId}/cancel`), { method: 'POST' })
+        await fetch(apiUrl(`/api/ai/runs/${currentRunId}/cancel`), { method: 'POST', credentials: 'include' })
       } catch {
         // Disconnecting the stream is the real cancellation path; this endpoint
         // is only a best-effort DB status update if the stream is still alive.

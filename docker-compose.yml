@@ -7,11 +7,16 @@ services:
     # No external port exposure — only reachable by dashboard on the internal network
 
   dashboard:
-    build: .
+    build:
+      context: .
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
     image: postdoc-dashboard:latest
     container_name: postdoc-dashboard
     ports:
-      - "8000:8000"
+      - "${POSTDOC_DOCKER_PORT:-8010}:8000"
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
       - ../applications.md:/app/seed/applications.md:ro
@@ -19,6 +24,8 @@ services:
     environment:
       - POSTDOC_DB=/app/data/postdoc.db
       - APPLICATIONS_MD=/app/seed/applications.md
+      - POSTDOC_STATIC_DIR=/app/static
+      - POSTDOC_DISABLE_REPLY_POLLER=1
       - SCRAPER_URL=http://scraper:8001
     depends_on:
       scraper:

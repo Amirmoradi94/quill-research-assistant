@@ -1,10 +1,25 @@
+FROM node:22-bookworm-slim AS web-build
+
+WORKDIR /build/web
+
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web ./
+ARG VITE_API_BASE=
+ENV VITE_API_BASE=${VITE_API_BASE}
+RUN npm run build
+
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     POSTDOC_DB=/app/data/postdoc.db \
-    APPLICATIONS_MD=/app/seed/applications.md
+    APPLICATIONS_MD=/app/seed/applications.md \
+    POSTDOC_STATIC_DIR=/app/static \
+    POSTDOC_DISABLE_REPLY_POLLER=1
 
 WORKDIR /app
 
@@ -15,8 +30,8 @@ COPY app ./app
 COPY ai ./ai
 COPY alembic ./alembic
 COPY alembic.ini ./
-COPY web/dist ./app/static
-RUN test -f ./app/static/index.html
+COPY --from=web-build /build/web/dist ./static
+RUN test -f ./static/index.html
 
 RUN mkdir -p /app/data /app/seed
 

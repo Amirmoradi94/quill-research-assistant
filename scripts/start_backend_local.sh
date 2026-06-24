@@ -14,6 +14,12 @@ fi
 find "$ROOT/app" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 cd "$ROOT"
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
 export PYTHONDONTWRITEBYTECODE=1
 export POSTDOC_DB="${POSTDOC_DB:-$ROOT/data/postdoc.db}"
 export APPLICATIONS_MD="${APPLICATIONS_MD:-$ROOT/../applications.md}"

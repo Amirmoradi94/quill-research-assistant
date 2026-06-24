@@ -2,9 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Compass, Sparkles, Check, X, Loader, ChevronDown, ChevronUp,
   AlertCircle, RefreshCw, SlidersHorizontal, ExternalLink, CircleDot,
-  MapPin, BookOpen, BadgeDollarSign, Filter, Users, Square,
+  MapPin, BookOpen, Users, Square,
 } from 'lucide-react'
-import { api, type Professor, type UserProfileFull } from '@/lib/api'
+import {
+  api,
+  type DiscoveryCandidate,
+  type DiscoveryCoverage,
+  type DiscoveryDepartment,
+  type DiscoveryPage,
+  type DiscoveryRun,
+  type DiscoveryUniversity,
+  type Professor,
+  type UserProfileFull,
+} from '@/lib/api'
 import { formatCategory } from '@/lib/categories'
 import { useQuillRun } from '@/hooks/useQuillRun'
 import { openExternalUrl } from '@/lib/openExternal'
@@ -13,8 +23,6 @@ import { openExternalUrl } from '@/lib/openExternal'
 
 type PositionType = 'postdoc' | 'phd' | 'master'
 type ProfRank = 'assistant' | 'associate' | 'full'
-type FundingType = 'fully_funded' | 'ta_ra' | 'fellowship' | 'any'
-type SortBy = 'match_score' | 'hiring' | 'location'
 
 type DiscoverySettings = {
   // position & timeline
@@ -40,17 +48,6 @@ type DiscoverySettings = {
   require_email: boolean
   prefer_international_lab: boolean
 
-  // hiring & funding
-  hiring_signals_only: boolean
-  funding_type: FundingType
-  min_stipend_hint: string      // hint like "$30k+"
-
-  // results & quality
-  count: number
-  min_match_score: number       // front-end display filter
-  max_per_university: number
-  sort_by: SortBy
-
   // pipeline exclusions
   skip_existing_universities: boolean
   skip_dismissed: boolean
@@ -59,16 +56,6 @@ type DiscoverySettings = {
   // department scoping
   target_departments: string
 }
-
-type DiscoveryBatchProgress = {
-  current: number
-  total: number
-  batchSize: number
-  target: number
-}
-
-const DISCOVERY_BATCH_SIZE = 10
-const DISCOVERY_BATCH_TIMEOUT_S = 600
 
 const DEFAULT: DiscoverySettings = {
   position_type: 'phd',
@@ -86,13 +73,6 @@ const DEFAULT: DiscoverySettings = {
   pub_recency_years: 3,
   require_email: false,
   prefer_international_lab: false,
-  hiring_signals_only: false,
-  funding_type: 'any',
-  min_stipend_hint: '',
-  count: 10,
-  min_match_score: 0,
-  max_per_university: 2,
-  sort_by: 'match_score',
   skip_existing_universities: true,
   skip_dismissed: true,
   exclude_disciplines: '',
@@ -109,10 +89,6 @@ const RANK_LABELS: Record<ProfRank, string> = {
   assistant: 'Asst.', associate: 'Assoc.', full: 'Full',
 }
 
-const FUNDING_LABELS: Record<FundingType, string> = {
-  fully_funded: 'Fully funded', ta_ra: 'TA / RA', fellowship: 'Fellowship', any: 'Any',
-}
-
 const START_DATE_OPTIONS = ['', 'Fall 2026', 'Spring 2027', 'Fall 2027', 'Spring 2028', 'Rolling']
 const DURATION_OPTIONS = ['any', '1 year', '2 years', '3+ years']
 const PUB_RECENCY_OPTIONS = [
@@ -122,77 +98,54 @@ const PUB_RECENCY_OPTIONS = [
   { label: 'Last 3 yrs', value: 3 },
   { label: 'Last 5 yrs', value: 5 },
 ]
-const SORT_LABELS: Record<SortBy, string> = {
-  match_score: 'Match score', hiring: 'Hiring likelihood', location: 'Location',
+const REGION_CODES = [
+  'AF', 'AL', 'DZ', 'AD', 'AO', 'AR', 'AM', 'AU', 'AT', 'AZ', 'BH', 'BD', 'BY', 'BE', 'BZ', 'BJ', 'BT', 'BO', 'BA', 'BW',
+  'BR', 'BN', 'BG', 'BF', 'BI', 'KH', 'CM', 'CA', 'CL', 'CN', 'CO', 'CR', 'HR', 'CU', 'CY', 'CZ', 'DK', 'DO', 'EC', 'EG',
+  'SV', 'EE', 'ET', 'FI', 'FR', 'GE', 'DE', 'GH', 'GR', 'GT', 'HN', 'HK', 'HU', 'IS', 'IN', 'ID', 'IR', 'IQ', 'IE', 'IL',
+  'IT', 'JP', 'JO', 'KZ', 'KE', 'KW', 'LV', 'LB', 'LT', 'LU', 'MY', 'MT', 'MX', 'MA', 'NL', 'NZ', 'NG', 'NO', 'PK', 'PE',
+  'PH', 'PL', 'PT', 'QA', 'RO', 'SA', 'RS', 'SG', 'SK', 'SI', 'ZA', 'KR', 'ES', 'LK', 'SE', 'CH', 'TW', 'TH', 'TN', 'TR',
+  'UA', 'AE', 'GB', 'US', 'UY', 'VN',
+]
+
+type CountryOption = { label: string; aliases?: string[] }
+
+const COUNTRY_ALIASES: Record<string, string[]> = {
+  Canada: ['CA'],
+  China: ['PRC'],
+  Germany: ['Deutschland'],
+  Netherlands: ['Holland'],
+  Switzerland: ['Swiss'],
+  'United Arab Emirates': ['UAE'],
+  'United Kingdom': ['UK', 'Britain', 'England'],
+  'United States': ['US', 'USA', 'America'],
 }
 
-function buildPromptParams(
-  s: DiscoverySettings,
-  existingUniversities: Set<string>,
-  dismissedIds: number[],
-  batch?: DiscoveryBatchProgress & { excludeCandidates: string[] },
-): Record<string, unknown> {
-  const params: Record<string, unknown> = {
-    position_type: s.position_type,
-    count: batch?.batchSize ?? s.count,
-    max_per_university: s.max_per_university,
-  }
+const REGION_OPTIONS: CountryOption[] = [
+  { label: 'European Union', aliases: ['EU', 'Europe'] },
+  { label: 'North America', aliases: ['US Canada', 'USA Canada'] },
+  { label: 'Scandinavia', aliases: ['Nordics', 'Nordic countries'] },
+]
 
-  if (batch) {
-    params.discovery_batch = batch.current
-    params.discovery_total_batches = batch.total
-    params.discovery_total_target = batch.target
-    if (batch.excludeCandidates.length > 0) {
-      params.exclude_candidates = batch.excludeCandidates.slice(0, 250).join('\n')
-    }
-  }
+const COUNTRY_DISPLAY_NAMES = typeof Intl !== 'undefined' && 'DisplayNames' in Intl
+  ? new Intl.DisplayNames(['en'], { type: 'region' })
+  : null
 
-  if (s.start_date) params.start_date = s.start_date
-  if (s.position_type === 'postdoc' && s.duration !== 'any') params.duration = s.duration
-  if (s.countries.trim()) params.target_countries = s.countries.trim()
-  if (s.exclude_countries.trim()) params.exclude_countries = s.exclude_countries.trim()
-  if (s.language_english_only) params.language_english_only = true
-
-  const keywordParts = []
-  if (s.primary_keywords.trim()) keywordParts.push(s.primary_keywords.trim())
-  if (s.adjacent_areas.trim()) keywordParts.push(`adjacent areas: ${s.adjacent_areas.trim()}`)
-  if (s.methods_techniques.trim()) keywordParts.push(`methods/techniques: ${s.methods_techniques.trim()}`)
-  if (s.application_domain.trim()) keywordParts.push(`application domain: ${s.application_domain.trim()}`)
-  if (keywordParts.length > 0) {
-    params[s.focus_mode === 'override' ? 'focus_override' : 'focus_supplement'] = keywordParts.join('\n')
-  }
-
-  if (s.prof_ranks.length < 3) params.prof_ranks = s.prof_ranks.join(', ')
-  if (s.pub_recency_years > 0) params.pub_recency_years = s.pub_recency_years
-  if (s.require_email) params.require_email = true
-  if (s.prefer_international_lab) params.prefer_international_lab = true
-  if (s.hiring_signals_only) params.hiring_signals_only = true
-  if (s.funding_type !== 'any') params.funding_type = s.funding_type
-  if (s.min_stipend_hint.trim()) params.min_stipend_hint = s.min_stipend_hint.trim()
-
-  if (s.skip_existing_universities && existingUniversities.size > 0) {
-    params.exclude_universities = [...existingUniversities].join(', ')
-  }
-  if (s.skip_dismissed && dismissedIds.length > 0) {
-    params.skip_professor_ids = dismissedIds.join(', ')
-  }
-  if (s.exclude_disciplines.trim()) params.exclude_disciplines = s.exclude_disciplines.trim()
-  if (s.target_departments.trim()) params.target_departments = s.target_departments.trim()
-
-  return params
-}
+const COUNTRY_OPTIONS: CountryOption[] = [
+  ...REGION_OPTIONS,
+  ...REGION_CODES
+    .map((code) => COUNTRY_DISPLAY_NAMES?.of(code) ?? code)
+    .map((label) => ({ label, aliases: COUNTRY_ALIASES[label] ?? [] })),
+].sort((a, b) => a.label.localeCompare(b.label))
 
 // ─── settings panel ─────────────────────────────────────────────────
 
-type SectionId = 'position' | 'geography' | 'research' | 'professor' | 'funding' | 'results' | 'exclusions'
+type SectionId = 'position' | 'geography' | 'research' | 'professor' | 'exclusions'
 
 const SECTIONS: { id: SectionId; label: string; icon: React.ReactNode }[] = [
   { id: 'position',   label: 'Position & Timeline', icon: <Sparkles size={13} /> },
   { id: 'geography',  label: 'Geography',           icon: <MapPin size={13} /> },
   { id: 'research',   label: 'Research focus',      icon: <BookOpen size={13} /> },
   { id: 'professor',  label: 'Professor profile',   icon: <Users size={13} /> },
-  { id: 'funding',    label: 'Hiring & funding',    icon: <BadgeDollarSign size={13} /> },
-  { id: 'results',    label: 'Results & quality',   icon: <Filter size={13} /> },
   { id: 'exclusions', label: 'Exclusions',          icon: <X size={13} /> },
 ]
 
@@ -329,16 +282,18 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
                 {id === 'geography' && (
                   <>
                     <Row label="Countries / regions">
-                      <input value={s.countries}
-                        onChange={(e) => set('countries', e.target.value)}
-                        placeholder="US, Canada, EU, Switzerland, UK…"
-                        className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
+                      <CountryAutocomplete
+                        value={s.countries}
+                        onChange={(value) => set('countries', value)}
+                        placeholder="US, Canada, EU, Switzerland, UK..."
+                      />
                     </Row>
                     <Row label="Exclude countries">
-                      <input value={s.exclude_countries}
-                        onChange={(e) => set('exclude_countries', e.target.value)}
-                        placeholder="e.g. China, Russia…"
-                        className="flex-1 px-2.5 py-1.5 rounded-md border text-[12px] outline-none" style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
+                      <CountryAutocomplete
+                        value={s.exclude_countries}
+                        onChange={(value) => set('exclude_countries', value)}
+                        placeholder="e.g. China, Germany..."
+                      />
                     </Row>
                     <Row label="">
                       <Toggle checked={s.language_english_only}
@@ -458,95 +413,6 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
                   </>
                 )}
 
-                {/* ── Hiring & funding ── */}
-                {id === 'funding' && (
-                  <>
-                    <Row label="">
-                      <Toggle checked={s.hiring_signals_only}
-                        onChange={(v) => set('hiring_signals_only', v)}
-                        label="Only show professors with active hiring signals" />
-                    </Row>
-                    <Row label="Funding type">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {(['any', 'fully_funded', 'ta_ra', 'fellowship'] as FundingType[]).map((f) => (
-                          <Pill key={f} active={s.funding_type === f}
-                            onClick={() => set('funding_type', f)}>
-                            {FUNDING_LABELS[f]}
-                          </Pill>
-                        ))}
-                      </div>
-                    </Row>
-                    <Row label="Stipend hint">
-                      <input value={s.min_stipend_hint}
-                        onChange={(e) => set('min_stipend_hint', e.target.value)}
-                        placeholder="e.g. $30k+, €24k…"
-                        className="w-36 px-2.5 py-1.5 rounded-md border text-[12px] outline-none"
-                        style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)', color: 'var(--color-ink)' }} />
-                      <span className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-                        used as a search hint
-                      </span>
-                    </Row>
-                  </>
-                )}
-
-                {/* ── Results & quality ── */}
-                {id === 'results' && (
-                  <>
-                    <Row label={
-                      <span>Professors to find <b style={{ color: 'var(--color-brand-600)' }}>{s.count}</b></span>
-                    }>
-                      <div className="flex-1">
-                        <input type="range" min={5} max={100} step={5} value={s.count}
-                          onChange={(e) => set('count', parseInt(e.target.value))}
-                          className="w-full" />
-                        <div className="flex justify-between text-[10px] mt-0.5"
-                          style={{ color: 'var(--color-muted)' }}>
-                          <span>5</span><span>100</span>
-                        </div>
-                      </div>
-                    </Row>
-                    <Row label="Max per university">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {[1, 2, 3, 4, 5, 10].map((n) => (
-                          <Pill key={n} active={s.max_per_university === n}
-                            onClick={() => set('max_per_university', n)}>
-                            {n}
-                          </Pill>
-                        ))}
-                        <Pill active={s.max_per_university === 0}
-                          onClick={() => set('max_per_university', 0)}>
-                          No limit
-                        </Pill>
-                      </div>
-                    </Row>
-                    <Row label={
-                      <span>Min match score <b style={{ color: 'var(--color-brand-600)' }}>
-                        {s.min_match_score > 0 ? `${s.min_match_score}+` : 'off'}
-                      </b></span>
-                    }>
-                      <div className="flex-1">
-                        <input type="range" min={0} max={90} step={10} value={s.min_match_score}
-                          onChange={(e) => set('min_match_score', parseInt(e.target.value))}
-                          className="w-full" />
-                        <div className="flex justify-between text-[10px] mt-0.5"
-                          style={{ color: 'var(--color-muted)' }}>
-                          <span>off</span><span>90+</span>
-                        </div>
-                      </div>
-                    </Row>
-                    <Row label="Sort by">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {(['match_score', 'hiring', 'location'] as SortBy[]).map((sb) => (
-                          <Pill key={sb} active={s.sort_by === sb}
-                            onClick={() => set('sort_by', sb)}>
-                            {SORT_LABELS[sb]}
-                          </Pill>
-                        ))}
-                      </div>
-                    </Row>
-                  </>
-                )}
-
                 {/* ── Exclusions ── */}
                 {id === 'exclusions' && (
                   <>
@@ -585,7 +451,7 @@ function SettingsPanel({ settings: s, onChange, onRun, running }: {
             : <><Sparkles size={13} /> Run discovery</>}
         </button>
         <span className="text-[12px]" style={{ color: 'var(--color-muted)' }}>
-          Quill will search the web for matching faculty
+          Quill will build university, department, and directory coverage
         </span>
         <button onClick={() => onChange(DEFAULT)}
           className="ml-auto text-[11px] px-2.5 py-1 rounded border"
@@ -692,6 +558,251 @@ function joinTerms(items: string[]): string {
   return uniqueTerms(items).join(', ')
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function firstTerms(value: string, limit = 2): string {
+  const terms = splitTerms(value).slice(0, limit)
+  return terms.length ? terms.join(', ') : ''
+}
+
+function hasCustomDiscoverySetup(s: DiscoverySettings): boolean {
+  return Boolean(
+    hasFilledResearchSettings(s)
+    || s.start_date
+    || s.countries.trim()
+    || s.exclude_countries.trim()
+    || s.language_english_only
+    || s.prof_ranks.length !== DEFAULT.prof_ranks.length
+    || s.require_email
+    || s.prefer_international_lab
+    || s.exclude_disciplines.trim()
+  )
+}
+
+function discoverySetupItems(s: DiscoverySettings): { label: string; value: string; active: boolean }[] {
+  const focus = firstTerms(
+    [
+      s.primary_keywords,
+      s.adjacent_areas,
+      s.methods_techniques,
+      s.application_domain,
+      s.target_departments,
+    ].filter(Boolean).join(', '),
+  )
+  return [
+    {
+      label: 'Focus',
+      value: focus || 'Set research focus',
+      active: Boolean(focus),
+    },
+    {
+      label: 'Location',
+      value: firstTerms(s.countries, 3) || 'Any region',
+      active: Boolean(s.countries.trim()),
+    },
+    {
+      label: 'Timeline',
+      value: s.start_date || 'Any start',
+      active: Boolean(s.start_date),
+    },
+    {
+      label: 'Coverage',
+      value: 'All matches',
+      active: true,
+    },
+  ]
+}
+
+function DiscoverySetupCta({ settings, settingsOpen, onOpen }: {
+  settings: DiscoverySettings
+  settingsOpen: boolean
+  onOpen: () => void
+}) {
+  const customized = hasCustomDiscoverySetup(settings)
+  const items = discoverySetupItems(settings)
+
+  return (
+    <section
+      className="mb-3 overflow-hidden rounded-md border shadow-[0_14px_34px_rgba(28,34,48,0.12)]"
+      style={{
+        background: 'color-mix(in srgb, var(--color-brand-50) 58%, var(--color-white))',
+        borderColor: 'var(--color-brand-400)',
+      }}
+    >
+      <div className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <div
+            className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-md border"
+            style={{
+              background: 'var(--color-white)',
+              borderColor: 'var(--color-brand-300)',
+              color: 'var(--color-brand-700)',
+            }}
+          >
+            <SlidersHorizontal size={18} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-[17px] font-bold leading-tight" style={{ color: 'var(--color-ink)' }}>
+                Set discovery filters first
+              </h2>
+              <span
+                className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                style={{
+                  background: customized ? 'var(--color-green-50)' : 'var(--color-amber-50)',
+                  borderColor: customized ? 'var(--color-green-200)' : 'var(--color-amber-200)',
+                  color: customized ? 'var(--color-green-700)' : 'var(--color-amber-700)',
+                }}
+              >
+                {customized ? 'Ready to review' : 'Recommended'}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {items.map((item) => (
+                <span
+                  key={item.label}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium"
+                  style={{
+                    background: item.active ? 'var(--color-white)' : 'color-mix(in srgb, var(--color-white) 68%, var(--color-amber-50))',
+                    borderColor: item.active ? 'var(--color-brand-300)' : 'var(--color-line)',
+                    color: item.active ? 'var(--color-ink)' : 'var(--color-muted)',
+                  }}
+                >
+                  <span style={{ color: item.active ? 'var(--color-brand-700)' : 'var(--color-muted)' }}>
+                    {item.label}
+                  </span>
+                  <span>{item.value}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={onOpen}
+          className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-md px-4 text-[13px] font-bold shadow-[0_10px_24px_rgba(28,34,48,0.18)] transition-transform hover:-translate-y-0.5 active:translate-y-0"
+          style={{ background: 'var(--color-ink)', color: 'white' }}
+        >
+          <SlidersHorizontal size={15} />
+          {settingsOpen ? 'Continue filters' : 'Set discovery filters'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function CountryAutocomplete({ value, onChange, placeholder }: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  const [focused, setFocused] = useState(false)
+  const [query, setQuery] = useState('')
+  const selectedValues = splitTerms(value)
+  const selected = new Set(selectedValues.map((item) => item.toLowerCase()))
+  const suggestions = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!focused || normalizedQuery.length < 1) return []
+
+    return COUNTRY_OPTIONS
+      .filter((option) => !selected.has(option.label.toLowerCase()))
+      .map((option) => {
+        const searchable = [option.label, ...(option.aliases ?? [])].map((item) => item.toLowerCase())
+        const starts = searchable.some((item) => item.startsWith(normalizedQuery))
+        const includes = searchable.some((item) => item.includes(normalizedQuery))
+        return { option, starts, includes }
+      })
+      .filter((item) => item.includes)
+      .sort((a, b) => Number(b.starts) - Number(a.starts) || a.option.label.localeCompare(b.option.label))
+      .slice(0, 7)
+      .map((item) => item.option)
+  }, [focused, query, selected])
+
+  const selectCountry = (country: string) => {
+    onChange(joinTerms([...selectedValues, country]))
+    setQuery('')
+    setFocused(true)
+  }
+
+  const removeCountry = (country: string) => {
+    onChange(selectedValues.filter((item) => item.toLowerCase() !== country.toLowerCase()).join(', '))
+  }
+
+  return (
+    <div className="relative min-w-[220px] flex-1">
+      <div
+        className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border px-2 py-1"
+        style={{ background: 'var(--color-white)', borderColor: focused ? 'var(--color-brand-400)' : 'var(--color-line)', color: 'var(--color-ink)' }}
+      >
+        {selectedValues.map((country) => (
+          <span
+            key={country}
+            className="inline-flex h-6 items-center gap-1 rounded border px-2 text-[11px] font-medium"
+            style={{
+              background: 'var(--color-brand-50)',
+              borderColor: 'var(--color-brand-300)',
+              color: 'var(--color-brand-700)',
+            }}
+          >
+            {country}
+            <button
+              type="button"
+              onClick={() => removeCountry(country)}
+              className="inline-flex h-4 w-4 items-center justify-center rounded hover:bg-[color:var(--color-white)]"
+              aria-label={`Remove ${country}`}
+              style={{ color: 'var(--color-brand-700)' }}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && suggestions[0]) {
+              e.preventDefault()
+              selectCountry(suggestions[0].label)
+            }
+            if (e.key === 'Backspace' && !query && selectedValues.length > 0) {
+              removeCountry(selectedValues[selectedValues.length - 1])
+            }
+            if (e.key === 'Escape') setFocused(false)
+          }}
+          placeholder={selectedValues.length ? 'Add another country...' : placeholder}
+          className="min-w-[150px] flex-1 bg-transparent px-1 py-1 text-[12px] outline-none"
+          style={{ color: 'var(--color-ink)' }}
+        />
+      </div>
+      {suggestions.length > 0 && (
+        <div
+          className="absolute left-0 right-0 top-full z-30 mt-1 max-h-56 overflow-auto rounded-md border p-1 shadow-[0_16px_34px_rgba(28,34,48,0.16)]"
+          style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}
+          role="listbox"
+        >
+          {suggestions.map((option) => (
+            <button
+              key={option.label}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => selectCountry(option.label)}
+              className="flex w-full items-center justify-between gap-2 rounded px-2.5 py-2 text-left text-[12px] font-medium hover:bg-[color:var(--color-brand-50)]"
+              style={{ color: 'var(--color-ink)' }}
+              role="option"
+            >
+              <span>{option.label}</span>
+              <Check size={12} style={{ color: 'var(--color-brand-600)' }} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Row({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3">
@@ -738,14 +849,212 @@ function Toggle({ checked, onChange, label }: {
   )
 }
 
+function DiscoveryRunStatus({ run, coverage, universities, departments, pages, candidates, running, onStop, onRefresh }: {
+  run: DiscoveryRun | null
+  coverage: DiscoveryCoverage | null
+  universities: DiscoveryUniversity[]
+  departments: DiscoveryDepartment[]
+  pages: DiscoveryPage[]
+  candidates: DiscoveryCandidate[]
+  running: boolean
+  onStop: () => void
+  onRefresh: () => void
+}) {
+  if (!run) return null
+  const latestLog = coverage?.recent_logs.find((log) => log.run_id === run.id)
+  const isActive = running || run.status === 'queued' || run.status === 'running'
+  const statusColor = run.status === 'done'
+    ? 'var(--color-green-700)'
+    : run.status === 'failed'
+      ? 'var(--color-rose-700)'
+      : 'var(--color-brand-700)'
+  const countries = run.target_countries?.join(', ') || '—'
+  const visibleUniversities = Math.max(universities.length, run.universities_total)
+  const visibleDepartments = Math.max(departments.length, run.departments_found)
+  const visiblePages = Math.max(pages.length, run.directory_pages_found)
+  const visibleCandidates = Math.max(candidates.length, run.candidates_extracted)
+
+  return (
+    <div className="rounded-md border px-4 py-3 mb-5"
+      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line)' }}>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {isActive && <Loader size={14} className="animate-spin" style={{ color: 'var(--color-brand-600)' }} />}
+            {run.status === 'done' && <Check size={14} style={{ color: 'var(--color-green-700)' }} />}
+            {run.status === 'failed' && <AlertCircle size={14} style={{ color: 'var(--color-rose-700)' }} />}
+            <h2 className="text-[14px] font-bold" style={{ color: 'var(--color-ink)' }}>Discovery coverage</h2>
+            <span className="rounded border px-1.5 py-0.5 font-mono text-[10px]"
+              style={{ borderColor: 'var(--color-line)', color: 'var(--color-muted)', background: 'var(--color-paper)' }}>
+              run #{run.id}
+            </span>
+            <span className="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+              style={{ borderColor: 'var(--color-line)', color: statusColor, background: 'var(--color-paper)' }}>
+              {run.status}
+            </span>
+          </div>
+          <div className="mt-1 text-[12px]" style={{ color: 'var(--color-muted)' }}>
+            {run.summary || `Covering ${countries}`}
+          </div>
+          {latestLog && (
+            <div className="mt-1 text-[11px]" style={{ color: latestLog.level === 'warning' ? 'var(--color-amber-700)' : 'var(--color-muted)' }}>
+              {latestLog.message}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {isActive && (
+            <button onClick={onStop} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
+              style={{ borderColor: 'var(--color-amber-300)', background: 'var(--color-amber-50)', color: 'var(--color-amber-700)' }}>
+              <Square size={11} /> Stop monitoring
+            </button>
+          )}
+          <button onClick={onRefresh} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px]"
+            style={{ borderColor: 'var(--color-line)', background: 'var(--color-paper-2)', color: 'var(--color-ink-soft)' }}>
+            <RefreshCw size={11} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+        <Field label="Countries" value={countries} />
+        <Field label="Source checks" value={run.universities_checked} />
+        <Field label="Universities found" value={visibleUniversities} />
+        <Field label="Departments seeded" value={visibleDepartments} />
+        <Field label="Pages queued" value={visiblePages} />
+        <Field label="Candidates found" value={visibleCandidates} />
+        <Field label="Failures" value={run.failures} />
+      </div>
+    </div>
+  )
+}
+
+function DiscoveryCandidateReview({ run, candidates, busy, onVerify, onPromote, onPromoteAll, onReject }: {
+  run: DiscoveryRun | null
+  candidates: DiscoveryCandidate[]
+  busy: string | null
+  onVerify: () => void
+  onPromote: (candidate: DiscoveryCandidate) => void
+  onPromoteAll: () => void
+  onReject: (candidate: DiscoveryCandidate) => void
+}) {
+  if (!run || candidates.length === 0) return null
+  const sorted = [...candidates].sort((a, b) => {
+    const statusRank = (status: string) => status === 'verified' ? 0 : status === 'pending' ? 1 : status === 'duplicate' ? 2 : 3
+    return statusRank(a.verification_status) - statusRank(b.verification_status)
+      || (b.match_score ?? -1) - (a.match_score ?? -1)
+      || a.name.localeCompare(b.name)
+  })
+  const visible = sorted.slice(0, 12)
+  const verifiedReady = candidates.filter((candidate) => candidate.verification_status === 'verified' && !candidate.professor_id).length
+  const pending = candidates.filter((candidate) => candidate.verification_status === 'pending').length
+  const busyVerify = busy === 'verify'
+  const busyPromoteAll = busy === 'promote-all'
+
+  return (
+    <section className="rounded-md border mb-5 overflow-hidden"
+      style={{ background: 'var(--color-white)', borderColor: 'var(--color-line-strong)' }}>
+      <div className="px-4 py-3 border-b flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+        style={{ borderColor: 'var(--color-line)', background: 'color-mix(in srgb, var(--color-paper) 70%, var(--color-white))' }}>
+        <div>
+          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Extracted candidates</h2>
+          <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            {candidates.length} extracted · {run.candidates_verified} verified · {run.candidates_rejected} rejected or duplicate
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={onVerify} disabled={busyVerify || pending === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-[12px] font-medium disabled:opacity-50"
+            style={{ borderColor: 'var(--color-brand-400)', background: 'var(--color-brand-50)', color: 'var(--color-brand-700)' }}>
+            {busyVerify ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            Verify & score
+          </button>
+          <button onClick={onPromoteAll} disabled={busyPromoteAll || verifiedReady === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold disabled:opacity-50"
+            style={{ background: 'var(--color-ink)', color: 'white' }}>
+            {busyPromoteAll ? <Loader size={13} className="animate-spin" /> : <Check size={13} />}
+            Add verified
+          </button>
+        </div>
+      </div>
+
+      <div className="divide-y" style={{ borderColor: 'var(--color-line)' }}>
+        {visible.map((candidate) => {
+          const actionBusy = busy === `promote-${candidate.id}` || busy === `reject-${candidate.id}`
+          const status = candidate.professor_id ? 'saved' : candidate.verification_status
+          const statusColor = status === 'verified' || status === 'saved'
+            ? 'var(--color-green-700)'
+            : status === 'rejected' || status === 'duplicate'
+              ? 'var(--color-rose-700)'
+              : 'var(--color-amber-700)'
+          return (
+            <div key={candidate.id} className="px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-start">
+              <MatchBadge value={candidate.match_score} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[14px] font-semibold" style={{ color: 'var(--color-ink)' }}>{candidate.name}</h3>
+                  <span className="rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                    style={{ borderColor: 'var(--color-line)', color: statusColor, background: 'var(--color-paper)' }}>
+                    {status}
+                  </span>
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                  {[candidate.university_name, candidate.dept_lab, candidate.country].filter(Boolean).join(' · ')}
+                </div>
+                <p className="text-[12px] mt-1.5 leading-relaxed line-clamp-2" style={{ color: 'var(--color-ink-soft)' }}>
+                  {candidate.research_text || candidate.evidence_summary || candidate.rejection_reason || 'No evidence summary captured.'}
+                </p>
+                {!!candidate.matched_reasons?.length && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {candidate.matched_reasons.slice(0, 3).map((reason) => (
+                      <span key={reason} className="rounded border px-1.5 py-0.5 text-[10px]"
+                        style={{ borderColor: 'var(--color-line)', color: 'var(--color-muted)', background: 'var(--color-paper-2)' }}>
+                        {reason}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2 lg:pt-1">
+                {candidate.profile_url && (
+                  <a href={candidate.profile_url} target="_blank" rel="noreferrer"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      if (candidate.profile_url) openExternalUrl(candidate.profile_url)
+                    }}
+                    className="inline-flex items-center gap-1 text-[12px]"
+                    style={{ color: 'var(--color-brand-600)' }}>
+                    Source <ExternalLink size={11} />
+                  </a>
+                )}
+                <button onClick={() => onPromote(candidate)}
+                  disabled={actionBusy || candidate.verification_status === 'rejected' || !!candidate.professor_id}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-medium disabled:opacity-50"
+                  style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)', color: 'var(--color-green-700)' }}>
+                  {busy === `promote-${candidate.id}` ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
+                  Add
+                </button>
+                <button onClick={() => onReject(candidate)}
+                  disabled={actionBusy || candidate.verification_status === 'rejected' || !!candidate.professor_id}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[11px] font-medium disabled:opacity-50"
+                  style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)', color: 'var(--color-rose-700)' }}>
+                  {busy === `reject-${candidate.id}` ? <Loader size={12} className="animate-spin" /> : <X size={12} />}
+                  Reject
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 // ─── run status bar ─────────────────────────────────────────────────
 
-function RunStatus({ quill, suggestionCount, mode, batchProgress, onStop }: {
+function RunStatus({ quill }: {
   quill: ReturnType<typeof useQuillRun>
-  suggestionCount: number
-  mode: 'discover' | 'research' | null
-  batchProgress?: DiscoveryBatchProgress | null
-  onStop?: () => void
 }) {
   const [showLog, setShowLog] = useState(true)
   const [now, setNow] = useState(Date.now())
@@ -759,19 +1068,15 @@ function RunStatus({ quill, suggestionCount, mode, batchProgress, onStop }: {
   const elapsedMs = (quill.endedAt ?? now) - (quill.startedAt ?? now)
   const elapsed = Math.max(0, Math.round(elapsedMs / 1000))
   const parsed = quill.events.some((evt) => evt.kind === 'parsed')
-  const providerStarted = quill.events.some((evt) => evt.kind === 'started')
-  const title = mode === 'research' ? 'Research monitor' : 'Discovery monitor'
-  const activeText = mode === 'research'
-    ? 'Researching the selected candidate'
-    : batchProgress
-      ? `Batch ${batchProgress.current}/${batchProgress.total}: finding ${batchProgress.batchSize} professors`
-      : 'Searching, scoring, and preparing candidate suggestions'
+  const quillStarted = quill.events.some((evt) => evt.kind === 'started')
+  const title = 'Research monitor'
+  const activeText = 'Researching the selected candidate'
   const steps = [
     { label: 'Create run', done: !!quill.runId, active: quill.state === 'running' && !quill.runId },
-    { label: 'Start AI provider', done: providerStarted || quill.state === 'done', active: quill.state === 'running' && !!quill.runId && !providerStarted },
-    { label: mode === 'research' ? 'Research candidate' : 'Search and score candidates', done: parsed || quill.state === 'done', active: quill.state === 'running' && providerStarted && !parsed },
-    { label: 'Parse structured result', done: parsed || quill.state === 'done', active: quill.state === 'running' && providerStarted && !parsed },
-    { label: mode === 'research' ? 'Update candidate profile' : 'Save ranked queue', done: quill.state === 'done', active: quill.state === 'running' && parsed },
+    { label: 'Start Quill', done: quillStarted || quill.state === 'done', active: quill.state === 'running' && !!quill.runId && !quillStarted },
+    { label: 'Research candidate', done: parsed || quill.state === 'done', active: quill.state === 'running' && quillStarted && !parsed },
+    { label: 'Parse structured result', done: parsed || quill.state === 'done', active: quill.state === 'running' && quillStarted && !parsed },
+    { label: 'Update candidate profile', done: quill.state === 'done', active: quill.state === 'running' && parsed },
   ]
 
   return (
@@ -796,21 +1101,16 @@ function RunStatus({ quill, suggestionCount, mode, batchProgress, onStop }: {
             {quill.state === 'running'
               ? `${activeText} · ${elapsed}s elapsed`
               : quill.state === 'done'
-                ? `Done in ${elapsed}s · ${suggestionCount} suggestion${suggestionCount !== 1 ? 's' : ''} ready`
+                ? `Done in ${elapsed}s`
                 : quill.state === 'cancelled'
                   ? `Stopped after ${elapsed}s`
                   : quill.error}
           </div>
-          {mode === 'discover' && batchProgress && (
-            <div className="mt-1 text-[11px]" style={{ color: 'var(--color-muted)' }}>
-              Overall target {batchProgress.target}; completed batches are saved before the next Codex run starts.
-            </div>
-          )}
         </div>
 
         <div className="flex items-center gap-2">
           {quill.state === 'running' && (
-            <button onClick={onStop ?? quill.cancel} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
+            <button onClick={quill.cancel} className="inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold"
               style={{ borderColor: 'var(--color-amber-300)', background: 'var(--color-amber-50)', color: 'var(--color-amber-700)' }}>
               <Square size={11} /> Stop
             </button>
@@ -881,7 +1181,7 @@ function RunStatus({ quill, suggestionCount, mode, batchProgress, onStop }: {
             </div>
             <pre className="min-h-28 max-h-56 overflow-auto whitespace-pre-wrap rounded p-2 font-mono text-[11px]"
               style={{ background: 'var(--color-ink)', color: '#d4e4ff' }}>
-              {quill.logText || (quill.state === 'running' ? 'Waiting for provider output…' : 'No provider text captured.')}
+              {quill.logText || (quill.state === 'running' ? 'Waiting for Quill output…' : 'No Quill text captured.')}
             </pre>
           </div>
         </div>
@@ -1147,8 +1447,15 @@ export function Discover() {
   const [settings, setSettings] = useState<DiscoverySettings>(DEFAULT)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [activeWorkflow, setActiveWorkflow] = useState<'discover' | 'research' | null>(null)
-  const [discoveryBatch, setDiscoveryBatch] = useState<DiscoveryBatchProgress | null>(null)
+  const [activeWorkflow, setActiveWorkflow] = useState<'research' | null>(null)
+  const [discoveryRun, setDiscoveryRun] = useState<DiscoveryRun | null>(null)
+  const [discoveryCoverage, setDiscoveryCoverage] = useState<DiscoveryCoverage | null>(null)
+  const [discoveryUniversities, setDiscoveryUniversities] = useState<DiscoveryUniversity[]>([])
+  const [discoveryDepartments, setDiscoveryDepartments] = useState<DiscoveryDepartment[]>([])
+  const [discoveryPages, setDiscoveryPages] = useState<DiscoveryPage[]>([])
+  const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([])
+  const [discoveryRunning, setDiscoveryRunning] = useState(false)
+  const [candidateAction, setCandidateAction] = useState<string | null>(null)
   const [acceptingAll, setAcceptingAll] = useState(false)
   const discoveryStopRef = useRef(false)
   const quill = useQuillRun()
@@ -1173,8 +1480,34 @@ export function Discover() {
     }
   }
 
+  const refreshDiscovery = async () => {
+    const coverage = await api.discoveryCoverage()
+    setDiscoveryCoverage(coverage)
+    const latest = coverage.active_run || coverage.latest_run
+    setDiscoveryRun(latest)
+    if (latest) {
+      const [universities, departments, pages, candidates] = await Promise.all([
+        api.discoveryUniversities(latest.id),
+        api.discoveryDepartments(latest.id),
+        api.discoveryPages(latest.id),
+        api.discoveryCandidates(latest.id),
+      ])
+      setDiscoveryUniversities(universities)
+      setDiscoveryDepartments(departments)
+      setDiscoveryPages(pages)
+      setDiscoveryCandidates(candidates)
+    } else {
+      setDiscoveryUniversities([])
+      setDiscoveryDepartments([])
+      setDiscoveryPages([])
+      setDiscoveryCandidates([])
+    }
+    return coverage
+  }
+
   useEffect(() => {
     reload()
+    refreshDiscovery().catch(() => {})
     window.addEventListener('quill:data-changed', reload)
     return () => window.removeEventListener('quill:data-changed', reload)
   }, [])
@@ -1197,63 +1530,119 @@ export function Discover() {
   }, [suggested.length, quill.state])
 
   const runDiscovery = async () => {
-    if (quill.state === 'running' || discoveryBatch) return
+    if (quill.state === 'running' || discoveryRunning) return
+    if (!settings.countries.trim()) {
+      setErr('Select at least one country or supported region before running discovery.')
+      setSettingsOpen(true)
+      return
+    }
     discoveryStopRef.current = false
-    setActiveWorkflow('discover')
     setErr(null)
-
-    const totalTarget = settings.count
-    const totalBatches = Math.max(1, Math.ceil(totalTarget / DISCOVERY_BATCH_SIZE))
+    setDiscoveryRunning(true)
 
     try {
-      for (let index = 0; index < totalBatches; index += 1) {
-        if (discoveryStopRef.current) break
-
-        const all = await reload()
-        const excludeCandidates = all
-          .filter((p) => p.name && p.university)
-          .map((p) => `${p.name} — ${p.university}`)
-        const batchSize = Math.min(DISCOVERY_BATCH_SIZE, totalTarget - index * DISCOVERY_BATCH_SIZE)
-        const progress = { current: index + 1, total: totalBatches, batchSize, target: totalTarget }
-        setDiscoveryBatch(progress)
-
-        const existing = new Set(
-          all.filter((p) => !p.is_suggested && p.university).map((p) => p.university!)
-        )
-        const dismissed = all.filter((p) => (p as any).dismissed_at).map((p) => p.id)
-        const params = buildPromptParams(settings, existing, dismissed, { ...progress, excludeCandidates })
-        const result = await quill.start({
-          workflow: 'discover_professors',
-          params,
-          max_turns: 12,
-          timeout_s: DISCOVERY_BATCH_TIMEOUT_S,
-        })
-        await reload()
-        if (result !== 'done') break
+      let run = await api.startDiscoveryRun({
+        position_type: settings.position_type,
+        target_countries: settings.countries,
+        target_departments: settings.target_departments,
+        filters: settings,
+      })
+      setDiscoveryRun(run)
+      await refreshDiscovery()
+      while (!discoveryStopRef.current && (run.status === 'queued' || run.status === 'running')) {
+        await wait(1800)
+        run = await api.discoveryRun(run.id)
+        setDiscoveryRun(run)
+        await refreshDiscovery()
       }
+      if (run.status === 'done') {
+        const [universities, departments, pages, candidates] = await Promise.all([
+          api.discoveryUniversities(run.id),
+          api.discoveryDepartments(run.id),
+          api.discoveryPages(run.id),
+          api.discoveryCandidates(run.id),
+        ])
+        setDiscoveryUniversities(universities)
+        setDiscoveryDepartments(departments)
+        setDiscoveryPages(pages)
+        setDiscoveryCandidates(candidates)
+      }
+      if (run.status === 'failed') {
+        setErr(run.error_message || run.summary || 'University coverage failed.')
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setDiscoveryBatch(null)
-      setActiveWorkflow(null)
+      setDiscoveryRunning(false)
     }
   }
 
   const stopDiscovery = () => {
     discoveryStopRef.current = true
-    quill.cancel()
+    setDiscoveryRunning(false)
   }
 
-  // front-end filters on results
-  const filtered = useMemo(() => suggested
-    .filter((p) => settings.min_match_score === 0 || (p.match_score ?? 0) >= settings.min_match_score)
+  const verifyDiscoveryCandidates = async () => {
+    if (!discoveryRun || candidateAction) return
+    setCandidateAction('verify')
+    setErr(null)
+    try {
+      await api.verifyDiscoveryCandidates(discoveryRun.id)
+      await refreshDiscovery()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCandidateAction(null)
+    }
+  }
+
+  const promoteDiscoveryCandidate = async (candidate: DiscoveryCandidate) => {
+    if (candidateAction) return
+    setCandidateAction(`promote-${candidate.id}`)
+    setErr(null)
+    try {
+      await api.promoteDiscoveryCandidate(candidate.id)
+      await Promise.all([refreshDiscovery(), reload()])
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCandidateAction(null)
+    }
+  }
+
+  const promoteAllVerifiedDiscoveryCandidates = async () => {
+    if (!discoveryRun || candidateAction) return
+    setCandidateAction('promote-all')
+    setErr(null)
+    try {
+      await api.promoteVerifiedDiscoveryCandidates(discoveryRun.id)
+      await Promise.all([refreshDiscovery(), reload()])
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCandidateAction(null)
+    }
+  }
+
+  const rejectDiscoveryCandidate = async (candidate: DiscoveryCandidate) => {
+    if (candidateAction) return
+    setCandidateAction(`reject-${candidate.id}`)
+    setErr(null)
+    try {
+      await api.rejectDiscoveryCandidate(candidate.id)
+      await refreshDiscovery()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCandidateAction(null)
+    }
+  }
+
+  // Always show every suggestion and sort strongest matches first.
+  const filtered = useMemo(() => [...suggested]
     .sort((a, b) => {
-      if (settings.sort_by === 'match_score') return (b.match_score ?? 0) - (a.match_score ?? 0)
-      if (settings.sort_by === 'hiring') {
-        const va = (a as any).hiring_signals?.phd ?? (a as any).hiring_signals ?? null
-        const vb = (b as any).hiring_signals?.phd ?? (b as any).hiring_signals ?? null
-        return (vb === true ? 1 : 0) - (va === true ? 1 : 0)
-      }
-      return (a.university ?? '').localeCompare(b.university ?? '')
-    }), [settings.min_match_score, settings.sort_by, suggested])
+      return (b.match_score ?? b.relevance_score ?? 0) - (a.match_score ?? a.relevance_score ?? 0)
+    }), [suggested])
 
   useEffect(() => {
     if (filtered.length && !filtered.some((p) => p.id === selectedId)) {
@@ -1305,6 +1694,10 @@ export function Discover() {
     reload()
   }
 
+  const openDiscoverySettings = () => {
+    setSettingsOpen(true)
+  }
+
   return (
     <div
       className="min-h-screen overflow-x-hidden px-5 py-4"
@@ -1322,20 +1715,15 @@ export function Discover() {
               Candidate Discovery
             </div>
             <h1 className="text-[31px] leading-none font-bold tracking-tight mt-1" style={{ color: 'var(--color-ink)' }}>
-              Discover candidates
+              Discover Candidates
             </h1>
-            <p className="text-[13px] mt-1 max-w-full sm:max-w-none sm:whitespace-nowrap leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
-              Search, score, and triage new professors before moving them into the application pipeline.
-            </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            <button onClick={runDiscovery} disabled={quill.state === 'running' || !!discoveryBatch}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold disabled:opacity-60"
+            <button onClick={openDiscoverySettings}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold"
               style={{ background: 'var(--color-ink)', color: 'white' }}>
-              {(quill.state === 'running' || discoveryBatch) && activeWorkflow === 'discover'
-                ? <Loader size={13} className="animate-spin" />
-                : <Sparkles size={13} />}
-              Run discovery
+              <SlidersHorizontal size={13} />
+              Set filters
             </button>
             {suggested.length > 0 && (
               <button onClick={acceptAll} disabled={acceptingAll}
@@ -1354,10 +1742,12 @@ export function Discover() {
                 color: settingsOpen ? 'var(--color-brand-700)' : 'var(--color-muted)',
               }}>
               <SlidersHorizontal size={13} />
-              {settingsOpen ? 'Hide setup' : 'Setup'}
+              {settingsOpen ? 'Hide filters' : 'Filters'}
             </button>
           </div>
         </div>
+
+        <DiscoverySetupCta settings={settings} settingsOpen={settingsOpen} onOpen={openDiscoverySettings} />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 mb-3">
           <MetricCard label="Pending" value={metrics.pending} />
@@ -1373,11 +1763,32 @@ export function Discover() {
 
       {settingsOpen && (
         <SettingsPanel settings={settings} onChange={setSettings}
-          onRun={runDiscovery} running={quill.state === 'running' || !!discoveryBatch} />
+          onRun={runDiscovery} running={quill.state === 'running' || discoveryRunning} />
       )}
 
-      <RunStatus quill={quill} suggestionCount={suggested.length} mode={activeWorkflow}
-        batchProgress={discoveryBatch} onStop={stopDiscovery} />
+      <DiscoveryRunStatus
+        run={discoveryRun}
+        coverage={discoveryCoverage}
+        universities={discoveryUniversities}
+        departments={discoveryDepartments}
+        pages={discoveryPages}
+        candidates={discoveryCandidates}
+        running={discoveryRunning}
+        onStop={stopDiscovery}
+        onRefresh={() => refreshDiscovery().catch((e) => setErr(e instanceof Error ? e.message : String(e)))}
+      />
+
+      <DiscoveryCandidateReview
+        run={discoveryRun}
+        candidates={discoveryCandidates}
+        busy={candidateAction}
+        onVerify={verifyDiscoveryCandidates}
+        onPromote={promoteDiscoveryCandidate}
+        onPromoteAll={promoteAllVerifiedDiscoveryCandidates}
+        onReject={rejectDiscoveryCandidate}
+      />
+
+      <RunStatus quill={quill} />
 
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-3 items-start">
           <section className="rounded-md border overflow-hidden"
@@ -1409,13 +1820,13 @@ export function Discover() {
                   No suggestions ready
                 </h3>
                 <p className="text-[13px] mt-1.5 max-w-full sm:max-w-md leading-relaxed" style={{ color: 'var(--color-ink-soft)' }}>
-                  Open setup and run discovery to generate a ranked review queue.
+                  Open filters and run discovery coverage. Quill will extract candidate profiles first; verification and scoring come next.
                 </p>
                 <button onClick={() => setSettingsOpen(true)}
                   className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-md text-[12px] font-medium border"
                   style={{ borderColor: 'var(--color-brand-400)', color: 'var(--color-brand-600)',
                     background: 'var(--color-brand-50)' }}>
-                  <SlidersHorizontal size={13} /> Open setup
+                  <SlidersHorizontal size={13} /> Open filters
                 </button>
               </div>
             )}

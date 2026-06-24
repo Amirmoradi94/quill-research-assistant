@@ -153,9 +153,6 @@ export function Sent() {
             <h1 className="mt-1 font-bold leading-tight tracking-tight" style={{ fontSize: 31, color: 'var(--color-ink)' }}>
               Sent outreach inbox
             </h1>
-            <p className="mt-1 max-w-full break-words text-[13px] leading-5 md:max-w-2xl" style={{ color: 'var(--color-muted)' }}>
-              Track sent emails, replies, follow-ups, and next-step outcomes from one conversation view.
-            </p>
           </div>
           <button onClick={checkReplies} disabled={polling}
             className="inline-flex w-fit items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium disabled:opacity-60"

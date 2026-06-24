@@ -48,6 +48,8 @@ export function Profile() {
   const [data, setData] = useState<UserProfileFull | null>(null)
   const [err, setErr]   = useState<string | null>(null)
   const [extractOpen, setExtractOpen] = useState(false)
+  const [deletingProfile, setDeletingProfile] = useState(false)
+  const confirm = useConfirm()
 
   const reload = useCallback(async () => {
     try {
@@ -73,6 +75,30 @@ export function Profile() {
   const patch = async (payload: Partial<UserProfileFull>) => {
     const next = await api.patchUser(payload)
     setData(next)
+  }
+
+  const deleteProfileData = async () => {
+    const ok = await confirm({
+      title: 'Delete profile data?',
+      detail: data?.name || 'Profile data',
+      message: 'This clears profile fields, education, publications, experience, awards, references, and linked document choices. Uploaded documents, drafts, and outreach data stay in Quill.',
+      confirmLabel: 'Delete profile data',
+      cancelLabel: 'Keep profile',
+      variant: 'danger',
+    })
+    if (!ok) return
+
+    setDeletingProfile(true)
+    try {
+      const next = await api.deleteUserProfileData()
+      setData(next)
+      setErr(null)
+      window.dispatchEvent(new CustomEvent('quill:data-changed'))
+    } catch (e: any) {
+      setErr(e?.message || String(e))
+    } finally {
+      setDeletingProfile(false)
+    }
   }
 
   if (!data) return (
@@ -102,7 +128,14 @@ export function Profile() {
       }}
     >
       <div className="w-[320px] max-w-full min-w-0 overflow-hidden sm:w-full">
-        <Hero data={data} err={err} onPatch={patch} onOpenExtract={() => setExtractOpen(true)} />
+        <Hero
+          data={data}
+          err={err}
+          onPatch={patch}
+          onOpenExtract={() => setExtractOpen(true)}
+          onDeleteProfileData={deleteProfileData}
+          deletingProfile={deletingProfile}
+        />
 
         <nav className="mb-2 rounded-md border px-2 py-1.5 flex items-center gap-1 overflow-x-auto text-[12px]"
           style={{ background: 'color-mix(in srgb, var(--color-white) 94%, var(--color-paper))', borderColor: 'var(--color-line-strong)' }}>
@@ -192,11 +225,13 @@ export function Profile() {
 }
 
 // ─── HERO ──────────────────────────────────────────────────────────
-function Hero({ data, err, onPatch, onOpenExtract }: {
+function Hero({ data, err, onPatch, onOpenExtract, onDeleteProfileData, deletingProfile }: {
   data: UserProfileFull
   err?: string | null
   onPatch: (p: Partial<UserProfileFull>) => Promise<void>
   onOpenExtract: () => void
+  onDeleteProfileData: () => void
+  deletingProfile: boolean
 }) {
   const stats = useMemo(() => {
     const pubsPublished = data.publications.filter((p) => p.status === 'published' || p.status === 'accepted').length
@@ -249,6 +284,20 @@ function Hero({ data, err, onPatch, onOpenExtract }: {
               </span>
             )}
             <AutoFillCTA data={data} onOpen={onOpenExtract} />
+            <button
+              type="button"
+              onClick={onDeleteProfileData}
+              disabled={deletingProfile}
+              className="inline-flex min-h-10 items-center gap-2 rounded-md border px-3 py-2 text-[12px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+              style={{
+                background: 'var(--color-rose-50)',
+                borderColor: 'var(--color-rose-200, #fecdd3)',
+                color: 'var(--color-rose-700, #be123c)',
+              }}
+            >
+              {deletingProfile ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              {deletingProfile ? 'Deleting...' : 'Delete profile data'}
+            </button>
           </div>
         </div>
 
@@ -941,8 +990,8 @@ function ExtractDrawer({ data, onClose, onPatch, onDone }: {
     setBusy(true); setLog([])
     try {
       await api.extractUserProfile((evt, d) => {
-        if (evt === 'run_id') setLog((l) => [...l, `Run #${d.id} started with ${d.provider}.\n`])
-        if (evt === 'started') setLog((l) => [...l, `Provider ready: ${d.provider}.\n`])
+        if (evt === 'run_id') setLog((l) => [...l, `Run #${d.id} started.\n`])
+        if (evt === 'started') setLog((l) => [...l, 'Quill ready.\n'])
         if (evt === 'text' && d.text) setLog((l) => [...l, d.text])
         if (evt === 'done')  setLog((l) => [...l, '\n✅ done\n'])
         if (evt === 'error') setLog((l) => [...l, `\n❌ ${d.error || d.message}\n`])

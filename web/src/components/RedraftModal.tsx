@@ -47,6 +47,7 @@ export function RedraftModal({ professorId, professorName, onClose, onDone }: {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        credentials: 'include',
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const reader = r.body!.getReader()

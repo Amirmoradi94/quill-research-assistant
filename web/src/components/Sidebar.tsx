@@ -12,14 +12,12 @@ import {
   TrendingUp,
   Settings,
   User as UserIcon,
-  Wrench,
   Zap,
 } from 'lucide-react'
 import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
 const NAV = [
   { to: '/',           label: 'Home',       icon: House,           end: true },
-  { to: '/setup',      label: 'Setup',      icon: Wrench },
   { to: '/profile',    label: 'Profile',    icon: UserIcon },
   { to: '/discover',   label: 'Discover',   icon: Compass },
   { to: '/professors', label: 'Professors', icon: Users },

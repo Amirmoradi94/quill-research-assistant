@@ -12,6 +12,12 @@ if [ ! -x "$VENV/bin/python" ]; then
 fi
 
 cd "$ROOT"
+if [ -f "$ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
 export PYTHONDONTWRITEBYTECODE=1
 export POSTDOC_DESKTOP=1
 export POSTDOC_DISABLE_REPLY_POLLER="${POSTDOC_DISABLE_REPLY_POLLER:-1}"

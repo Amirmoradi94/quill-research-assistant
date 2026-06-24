@@ -59,6 +59,40 @@
   --ease-quill: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+/* Keep core design tokens available for inline React styles after Tailwind's
+   production tree-shaking. */
+:root {
+  --color-paper:    #fbfaf7;
+  --color-paper-2:  #ebe7dc;
+  --color-paper-3:  #ddd7c6;
+  --color-white:    #ffffff;
+  --color-line:     #dcd5c2;
+  --color-line-strong: #c8c0a8;
+
+  --color-ink:       #1c2230;
+  --color-ink-soft:  #3d4555;
+  --color-muted:     #6b7280;
+  --color-muted-2:   #9aa1ad;
+
+  --color-brand-50:  #eef4ff;
+  --color-brand-100: #dde8ff;
+  --color-brand-200: #bcd0ff;
+  --color-brand-500: #3b6fe0;
+  --color-brand-600: #2f5ccb;
+  --color-brand-700: #264ba8;
+
+  --color-green-50:  #ecfdf5;
+  --color-green-500: #10b981;
+  --color-green-700: #047857;
+  --color-amber-50:  #fffbeb;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-rose-50:   #fff1f2;
+  --color-rose-500:  #f43f5e;
+  --color-rose-700:  #be123c;
+}
+
 /* Research category accents — kept outside @theme to avoid Tailwind v4
    tree-shaking, since these are referenced dynamically via
    var(--color-cat-${category}) and the scanner can't see them. */
@@ -93,7 +127,15 @@ html, body, #root {
 }
 
 /* Quill markdown rendering */
-.quill-md p { margin: 0 0 0.6em; }
+.quill-md {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.quill-md > :first-child { margin-top: 0; }
+.quill-md > :last-child { margin-bottom: 0; }
+.quill-md p { margin: 0 0 0.65em; }
 .quill-md p:last-child { margin-bottom: 0; }
 .quill-md strong { font-weight: 600; color: var(--color-ink); }
 .quill-md em { font-style: italic; }
@@ -111,6 +153,7 @@ html, body, #root {
   border: 1px solid var(--color-line);
   border-radius: 6px;
   padding: 0.75em 1em;
+  max-width: 100%;
   overflow-x: auto;
   margin: 0.5em 0;
 }
@@ -126,8 +169,35 @@ html, body, #root {
 }
 .quill-md ul { list-style: disc; }
 .quill-md ol { list-style: decimal; }
-.quill-md li { margin-bottom: 0.2em; }
-.quill-md h1, .quill-md h2, .quill-md h3 {
+.quill-md li {
+  margin-bottom: 0.28em;
+  padding-left: 0.1em;
+}
+.quill-md li::marker {
+  color: var(--color-muted);
+  font-weight: 600;
+}
+.quill-md li > p {
+  display: inline;
+  margin: 0;
+}
+.quill-md li > ul,
+.quill-md li > ol {
+  margin-top: 0.3em;
+}
+.quill-md .contains-task-list {
+  list-style: none;
+  margin-left: 0;
+}
+.quill-md .task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45em;
+}
+.quill-md .task-list-item input {
+  margin-top: 0.32em;
+}
+.quill-md h1, .quill-md h2, .quill-md h3, .quill-md h4 {
   font-weight: 600;
   color: var(--color-ink);
   margin: 0.8em 0 0.3em;
@@ -136,14 +206,35 @@ html, body, #root {
 .quill-md h1 { font-size: 1.15em; }
 .quill-md h2 { font-size: 1.05em; }
 .quill-md h3 { font-size: 0.95em; }
-.quill-md a { color: var(--color-brand-600); text-decoration: underline; }
-.quill-md table {
+.quill-md h4 { font-size: 0.9em; }
+.quill-md a {
+  color: var(--color-brand-600);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.quill-md a:hover {
+  color: var(--color-brand-700);
+}
+.quill-md img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.55em 0;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+}
+.quill-md-table-wrap {
   display: block;
   width: 100%;
   max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
   margin: 0.6em 0;
+}
+.quill-md table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
   font-size: 0.88em;
 }
 .quill-md th,
@@ -167,6 +258,9 @@ html, body, #root {
   margin: 0.5em 0;
   padding: 0.25em 0.75em;
   color: var(--color-muted);
+}
+.quill-md blockquote p:last-child {
+  margin-bottom: 0;
 }
 .quill-md hr {
   border: none;

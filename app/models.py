@@ -10,6 +10,7 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -204,11 +205,13 @@ class Settings(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True)
-    ai_provider = Column(String, nullable=False, default="claude_cli")
+    ai_provider = Column(String, nullable=False, default="openrouter_api")
     claude_cli_path = Column(String, nullable=True)
     codex_cli_path = Column(String, nullable=True)
     anthropic_api_key = Column(String, nullable=True)
     openai_api_key = Column(String, nullable=True)
+    openrouter_api_key = Column(String, nullable=True)
+    openrouter_model = Column(String, nullable=False, default="z-ai/glm-5.2")
     default_provider_per_workflow = Column(JSON, nullable=True)
     email_tone_rules = Column(Text, nullable=True)
     daily_cost_cap_usd = Column(Float, nullable=False, default=5.0)
@@ -296,6 +299,222 @@ class Professor(Base):
         "ProfessorPaper", back_populates="professor", cascade="all, delete-orphan",
         order_by="ProfessorPaper.year.desc()",
     )
+
+
+# ───────────────────────────────────────────────────────────────────
+# Deterministic discovery crawl state
+# ───────────────────────────────────────────────────────────────────
+class DiscoveryRun(Base):
+    """One exhaustive discovery pass across target countries/universities."""
+    __tablename__ = "discovery_runs"
+
+    id = Column(Integer, primary_key=True)
+    status = Column(String, nullable=False, default="queued", index=True)  # queued|running|done|failed|cancelled
+    phase = Column(String, nullable=False, default="schema")               # universities|departments|pages|candidates|scoring
+    position_type = Column(String, nullable=True)
+    target_countries = Column(JSON, nullable=True)
+    target_departments = Column(JSON, nullable=True)
+    filters = Column(JSON, nullable=True)
+
+    universities_total = Column(Integer, nullable=False, default=0)
+    universities_checked = Column(Integer, nullable=False, default=0)
+    departments_found = Column(Integer, nullable=False, default=0)
+    directory_pages_found = Column(Integer, nullable=False, default=0)
+    pages_crawled = Column(Integer, nullable=False, default=0)
+    candidates_extracted = Column(Integer, nullable=False, default=0)
+    candidates_verified = Column(Integer, nullable=False, default=0)
+    candidates_rejected = Column(Integer, nullable=False, default=0)
+    professors_saved = Column(Integer, nullable=False, default=0)
+    failures = Column(Integer, nullable=False, default=0)
+
+    summary = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    universities = relationship("DiscoveryUniversity", back_populates="run", cascade="all, delete-orphan")
+    departments = relationship("DiscoveryDepartment", back_populates="run", cascade="all, delete-orphan")
+    pages = relationship("DiscoveryPage", back_populates="run", cascade="all, delete-orphan")
+    candidates = relationship("DiscoveryCandidate", back_populates="run", cascade="all, delete-orphan")
+    logs = relationship("DiscoveryLog", back_populates="run", cascade="all, delete-orphan")
+
+
+class DiscoveryUniversity(Base):
+    """University candidate discovered for a crawl run."""
+    __tablename__ = "discovery_universities"
+    __table_args__ = (
+        UniqueConstraint("run_id", "normalized_name", "country", name="uq_discovery_university_run_name_country"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False, index=True)
+    country = Column(String, nullable=False, index=True)
+    country_code = Column(String, nullable=True, index=True)
+    region = Column(String, nullable=True)
+    official_domain = Column(String, nullable=True, index=True)
+    official_url = Column(String, nullable=True)
+    source = Column(String, nullable=True)                   # ror|openalex|search|manual
+    source_url = Column(String, nullable=True)
+    source_confidence = Column(Float, nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|checked|failed|skipped
+    error_message = Column(Text, nullable=True)
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+    checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    run = relationship("DiscoveryRun", back_populates="universities")
+    departments = relationship("DiscoveryDepartment", back_populates="university", cascade="all, delete-orphan")
+    pages = relationship("DiscoveryPage", back_populates="university", cascade="all, delete-orphan")
+    candidates = relationship("DiscoveryCandidate", back_populates="university")
+
+
+class DiscoveryDepartment(Base):
+    """Relevant department, school, institute, or research group page seed."""
+    __tablename__ = "discovery_departments"
+    __table_args__ = (
+        UniqueConstraint("run_id", "university_id", "normalized_name", name="uq_discovery_department_run_university_name"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    university_id = Column(Integer, ForeignKey("discovery_universities.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False, index=True)
+    school = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    domain = Column(String, nullable=True, index=True)
+    source = Column(String, nullable=True)                   # search|sitemap|university_page|manual
+    relevance_keywords = Column(JSON, nullable=True)
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|queued|crawled|failed|skipped
+    error_message = Column(Text, nullable=True)
+    discovered_at = Column(DateTime, default=datetime.utcnow)
+    crawled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    run = relationship("DiscoveryRun", back_populates="departments")
+    university = relationship("DiscoveryUniversity", back_populates="departments")
+    pages = relationship("DiscoveryPage", back_populates="department", cascade="all, delete-orphan")
+    candidates = relationship("DiscoveryCandidate", back_populates="department")
+
+
+class DiscoveryPage(Base):
+    """A crawlable page URL with fetch/extraction state."""
+    __tablename__ = "discovery_pages"
+    __table_args__ = (
+        UniqueConstraint("run_id", "normalized_url", name="uq_discovery_page_run_url"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    university_id = Column(Integer, ForeignKey("discovery_universities.id"), nullable=True, index=True)
+    department_id = Column(Integer, ForeignKey("discovery_departments.id"), nullable=True, index=True)
+    url = Column(Text, nullable=False)
+    normalized_url = Column(Text, nullable=False)
+    final_url = Column(Text, nullable=True)
+    page_type = Column(String, nullable=False, default="unknown", index=True)  # department|faculty_directory|lab|profile|sitemap|unknown
+    status = Column(String, nullable=False, default="pending", index=True)    # pending|crawled|failed|skipped
+    depth = Column(Integer, nullable=False, default=0)
+    fetcher = Column(String, nullable=True)                  # httpx|scrapling|playwright|crawl4ai
+    http_status = Column(Integer, nullable=True)
+    content_hash = Column(String, nullable=True, index=True)
+    title = Column(String, nullable=True)
+    discovered_from_url = Column(Text, nullable=True)
+    extracted_count = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    first_seen_at = Column(DateTime, default=datetime.utcnow)
+    last_crawled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    run = relationship("DiscoveryRun", back_populates="pages")
+    university = relationship("DiscoveryUniversity", back_populates="pages")
+    department = relationship("DiscoveryDepartment", back_populates="pages")
+    candidates = relationship("DiscoveryCandidate", back_populates="source_page")
+    evidence = relationship("DiscoveryEvidence", back_populates="page")
+
+
+class DiscoveryCandidate(Base):
+    """Extracted professor candidate before/after verification and scoring."""
+    __tablename__ = "discovery_candidates"
+    __table_args__ = (
+        UniqueConstraint("run_id", "normalized_name", "university_id", name="uq_discovery_candidate_run_name_university"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    university_id = Column(Integer, ForeignKey("discovery_universities.id"), nullable=True, index=True)
+    department_id = Column(Integer, ForeignKey("discovery_departments.id"), nullable=True, index=True)
+    source_page_id = Column(Integer, ForeignKey("discovery_pages.id"), nullable=True, index=True)
+    professor_id = Column(Integer, ForeignKey("professors.id"), nullable=True, index=True)
+
+    name = Column(String, nullable=False)
+    normalized_name = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=True)
+    rank = Column(String, nullable=True, index=True)
+    university_name = Column(String, nullable=True)
+    country = Column(String, nullable=True, index=True)
+    dept_lab = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    profile_url = Column(Text, nullable=True)
+    lab_url = Column(Text, nullable=True)
+    scholar_url = Column(Text, nullable=True)
+    research_text = Column(Text, nullable=True)
+    evidence_summary = Column(Text, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+
+    extraction_confidence = Column(Float, nullable=True)
+    verification_status = Column(String, nullable=False, default="pending", index=True)  # pending|verified|rejected|duplicate
+    rejection_reason = Column(Text, nullable=True)
+    match_score = Column(Integer, nullable=True, index=True)
+    matched_reasons = Column(JSON, nullable=True)
+    scored_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    run = relationship("DiscoveryRun", back_populates="candidates")
+    university = relationship("DiscoveryUniversity", back_populates="candidates")
+    department = relationship("DiscoveryDepartment", back_populates="candidates")
+    source_page = relationship("DiscoveryPage", back_populates="candidates")
+    professor = relationship("Professor")
+    evidence = relationship("DiscoveryEvidence", back_populates="candidate", cascade="all, delete-orphan")
+
+
+class DiscoveryEvidence(Base):
+    """Small evidence snippets/URLs supporting a candidate or crawl decision."""
+    __tablename__ = "discovery_evidence"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("discovery_candidates.id"), nullable=True, index=True)
+    page_id = Column(Integer, ForeignKey("discovery_pages.id"), nullable=True, index=True)
+    evidence_type = Column(String, nullable=False, index=True)  # profile|email|research|rank|department|country|rejection
+    url = Column(Text, nullable=True)
+    quote = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    candidate = relationship("DiscoveryCandidate", back_populates="evidence")
+    page = relationship("DiscoveryPage", back_populates="evidence")
+
+
+class DiscoveryLog(Base):
+    """Append-only crawler log entries for coverage and debugging."""
+    __tablename__ = "discovery_logs"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    level = Column(String, nullable=False, default="info", index=True)  # debug|info|warning|error
+    stage = Column(String, nullable=True, index=True)
+    message = Column(Text, nullable=False)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    run = relationship("DiscoveryRun", back_populates="logs")
 
 
 class EmailDraft(Base):

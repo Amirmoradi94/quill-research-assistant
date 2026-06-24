@@ -18,7 +18,6 @@ export type QuillEvent =
 export type RunInput = {
   workflow: string
   params?: Record<string, any>
-  preferred_provider?: 'claude_cli' | 'codex_cli'
   professor_id?: number
   document_id?: number
   grant_id?: number
@@ -43,6 +42,7 @@ export async function* runQuill(
     headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
     body: JSON.stringify(input),
     signal,
+    credentials: 'include',
   })
   if (!r.ok) {
     const text = await r.text().catch(() => '')
@@ -84,26 +84,4 @@ function parseFrame(frame: string): QuillEvent | null {
   } catch {
     return null
   }
-}
-
-// ── Provider info ───────────────────────────────────────────────────
-export type ProvidersStatus = {
-  selected_default: string
-  active: string | null
-  claude_cli: { available: boolean; path: string | null }
-  codex_cli:  { available: boolean; path: string | null }
-  anthropic_api: { configured: boolean }
-  openai_api:    { configured: boolean }
-  daily_cost_cap_usd: number
-}
-
-export async function fetchProviders(): Promise<ProvidersStatus> {
-  let r: Response
-  try {
-    r = await fetch(apiUrl('/api/ai/providers'))
-  } catch {
-    throw new Error('Local backend is not reachable on 127.0.0.1:8000')
-  }
-  if (!r.ok) throw new Error(`providers ${r.status}`)
-  return r.json()
 }

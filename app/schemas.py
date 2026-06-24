@@ -1,5 +1,5 @@
 from datetime import date as _date, datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 from pydantic import BaseModel, ConfigDict
 
 
@@ -346,3 +346,143 @@ class UserProfileOut(UserProfileUpdate):
     awards: List[UserAwardOut] = []
     references: List[UserReferenceOut] = []
     model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryRunOut(BaseModel):
+    id: int
+    status: str
+    phase: str
+    position_type: Optional[str] = None
+    target_countries: Optional[List[str]] = None
+    target_departments: Optional[List[str]] = None
+    filters: Optional[dict[str, Any]] = None
+    universities_total: int = 0
+    universities_checked: int = 0
+    departments_found: int = 0
+    directory_pages_found: int = 0
+    pages_crawled: int = 0
+    candidates_extracted: int = 0
+    candidates_verified: int = 0
+    candidates_rejected: int = 0
+    professors_saved: int = 0
+    failures: int = 0
+    summary: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryRunCreate(BaseModel):
+    position_type: Optional[str] = None
+    target_countries: Any = None
+    target_departments: Any = None
+    filters: Optional[dict[str, Any]] = None
+
+
+class DiscoveryUniversityOut(BaseModel):
+    id: int
+    run_id: int
+    name: str
+    normalized_name: str
+    country: str
+    country_code: Optional[str] = None
+    region: Optional[str] = None
+    official_domain: Optional[str] = None
+    official_url: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    source_confidence: Optional[float] = None
+    status: str
+    error_message: Optional[str] = None
+    discovered_at: Optional[datetime] = None
+    checked_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryDepartmentOut(BaseModel):
+    id: int
+    run_id: int
+    university_id: int
+    name: str
+    normalized_name: str
+    school: Optional[str] = None
+    url: Optional[str] = None
+    domain: Optional[str] = None
+    source: Optional[str] = None
+    relevance_keywords: Optional[List[str]] = None
+    status: str
+    error_message: Optional[str] = None
+    discovered_at: Optional[datetime] = None
+    crawled_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryPageOut(BaseModel):
+    id: int
+    run_id: int
+    university_id: Optional[int] = None
+    department_id: Optional[int] = None
+    url: str
+    normalized_url: str
+    final_url: Optional[str] = None
+    page_type: str
+    status: str
+    depth: int
+    fetcher: Optional[str] = None
+    http_status: Optional[int] = None
+    content_hash: Optional[str] = None
+    title: Optional[str] = None
+    discovered_from_url: Optional[str] = None
+    extracted_count: int = 0
+    error_message: Optional[str] = None
+    first_seen_at: Optional[datetime] = None
+    last_crawled_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryCandidateOut(BaseModel):
+    id: int
+    run_id: int
+    university_id: Optional[int] = None
+    department_id: Optional[int] = None
+    source_page_id: Optional[int] = None
+    professor_id: Optional[int] = None
+    name: str
+    normalized_name: str
+    title: Optional[str] = None
+    rank: Optional[str] = None
+    university_name: Optional[str] = None
+    country: Optional[str] = None
+    dept_lab: Optional[str] = None
+    email: Optional[str] = None
+    profile_url: Optional[str] = None
+    lab_url: Optional[str] = None
+    scholar_url: Optional[str] = None
+    research_text: Optional[str] = None
+    evidence_summary: Optional[str] = None
+    raw_payload: Optional[dict[str, Any]] = None
+    extraction_confidence: Optional[float] = None
+    verification_status: str
+    rejection_reason: Optional[str] = None
+    match_score: Optional[int] = None
+    matched_reasons: Optional[List[str]] = None
+    scored_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiscoveryCoverageOut(BaseModel):
+    active_run: Optional[DiscoveryRunOut] = None
+    latest_run: Optional[DiscoveryRunOut] = None
+    totals: dict[str, int]
+    recent_logs: List[dict[str, Any]] = []

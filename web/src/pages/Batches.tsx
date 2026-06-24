@@ -244,6 +244,7 @@ export function Batches() {
     const r = await fetch(apiUrl(`/api/drafts/${draftId}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(patch),
     })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText} · /api/drafts/${draftId}`)
@@ -284,9 +285,6 @@ export function Batches() {
             <h1 className="mt-1 font-bold leading-tight tracking-tight" style={{ fontSize: 31, color: 'var(--color-ink)' }}>
               Send batch planner
             </h1>
-            <p className="mt-1 max-w-full break-words text-[13px] leading-5 md:max-w-2xl" style={{ color: 'var(--color-muted)' }}>
-              Review safe daily send groups before any email leaves Gmail.
-            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {gmailConnected ? (

@@ -1,6 +1,9 @@
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -8,12 +11,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -23,6 +26,14 @@ from .quill import RunIn, _drain_run, _prepare_ai_run, router as quill_router
 from .documents import router as documents_router
 from .user_profile import _user as get_user_singleton, router as user_router
 from . import scoring
+from .discovery import (
+    extract_candidates_for_run,
+    parse_country_targets,
+    promote_candidate_to_professor,
+    run_discovery_seed_pipeline,
+    seed_department_pages_for_run,
+    verify_and_score_candidates_for_run,
+)
 from .runtime import data_dir, db_path, documents_dir, is_desktop_mode
 
 Base.metadata.create_all(bind=engine)
@@ -45,7 +56,29 @@ def _ensure_ai_run_recovery_columns() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_runs_retry_of_run_id ON ai_runs (retry_of_run_id)"))
 
 
+def _ensure_settings_web_columns() -> None:
+    """Keep existing local SQLite settings rows compatible with new web features."""
+    with engine.begin() as conn:
+        existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(settings)").fetchall()}
+        additions = {
+            "openrouter_api_key": "VARCHAR",
+            "openrouter_model": "VARCHAR DEFAULT 'z-ai/glm-5.2' NOT NULL",
+        }
+        for name, ddl in additions.items():
+            if name not in existing:
+                conn.exec_driver_sql(f"ALTER TABLE settings ADD COLUMN {name} {ddl}")
+        conn.exec_driver_sql(
+            "UPDATE settings SET ai_provider = 'openrouter_api' "
+            "WHERE ai_provider IN ('claude_cli', 'codex_cli')"
+        )
+        conn.exec_driver_sql(
+            "UPDATE settings SET openrouter_model = 'z-ai/glm-5.2' "
+            "WHERE openrouter_model IS NULL OR openrouter_model = '' OR openrouter_model = 'openai/gpt-5.2'"
+        )
+
+
 _ensure_ai_run_recovery_columns()
+_ensure_settings_web_columns()
 if not is_desktop_mode() or os.environ.get("POSTDOC_SEED_APPLICATIONS", "").lower() in {"1", "true", "yes"}:
     seed_if_empty()
 
@@ -53,6 +86,90 @@ app = FastAPI(title="Quill AI", version="1.0.0")
 app.include_router(quill_router)
 app.include_router(documents_router)
 app.include_router(user_router)
+
+
+WEB_LOGIN_USERNAME = os.environ.get("POSTDOC_WEB_USERNAME", "amir")
+WEB_LOGIN_PASSWORD = os.environ.get("POSTDOC_WEB_PASSWORD", "quill")
+WEB_AUTH_SECRET = os.environ.get("POSTDOC_WEB_AUTH_SECRET") or os.environ.get("SECRET_KEY") or "quill-dev-web-secret"
+WEB_AUTH_COOKIE = "quill_session"
+
+
+def _sign_session(username: str) -> str:
+    issued = str(int(datetime.utcnow().timestamp()))
+    nonce = secrets.token_urlsafe(16)
+    payload = f"{username}:{issued}:{nonce}"
+    sig = hmac.new(WEB_AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def _valid_session(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    parts = value.split(":")
+    if len(parts) != 4:
+        return False
+    username, issued, nonce, sig = parts
+    payload = f"{username}:{issued}:{nonce}"
+    expected = hmac.new(WEB_AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        return False
+    try:
+        age = int(datetime.utcnow().timestamp()) - int(issued)
+    except ValueError:
+        return False
+    return username == WEB_LOGIN_USERNAME and 0 <= age <= 60 * 60 * 24 * 14
+
+
+@app.middleware("http")
+async def _web_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if (
+        path == "/api/health"
+        or path.startswith("/api/auth/")
+        or not path.startswith("/api/")
+        or is_desktop_mode()
+    ):
+        return await call_next(request)
+    if not _valid_session(request.cookies.get(WEB_AUTH_COOKIE)):
+        return JSONResponse({"detail": "Authentication required."}, status_code=401)
+    return await call_next(request)
+
+
+class LoginBody(BaseModel):
+    username: str = ""
+    password: str = ""
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    return {
+        "authenticated": is_desktop_mode() or _valid_session(request.cookies.get(WEB_AUTH_COOKIE)),
+        "username": WEB_LOGIN_USERNAME,
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: LoginBody):
+    if payload.username.strip() != WEB_LOGIN_USERNAME or payload.password != WEB_LOGIN_PASSWORD:
+        raise HTTPException(401, "Invalid username or password.")
+    response = JSONResponse({"ok": True, "username": WEB_LOGIN_USERNAME})
+    response.set_cookie(
+        WEB_AUTH_COOKIE,
+        _sign_session(WEB_LOGIN_USERNAME),
+        httponly=True,
+        samesite="lax",
+        secure=os.environ.get("POSTDOC_WEB_SECURE_COOKIE", "").lower() in {"1", "true", "yes"},
+        max_age=60 * 60 * 24 * 14,
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(WEB_AUTH_COOKIE, path="/")
+    return response
 
 
 @app.on_event("startup")
@@ -85,9 +202,16 @@ app.add_middleware(
     allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?|https?://tauri\.localhost|tauri://localhost)$",
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
-STATIC_DIR = Path(__file__).parent / "static"
+_LEGACY_STATIC_DIR = Path(__file__).parent / "static"
+_WEB_DIST_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"
+STATIC_DIR = (
+    Path(os.environ["POSTDOC_STATIC_DIR"])
+    if os.environ.get("POSTDOC_STATIC_DIR")
+    else (_WEB_DIST_DIR if _WEB_DIST_DIR.exists() else _LEGACY_STATIC_DIR)
+)
 
 
 @app.get("/api/health")
@@ -124,6 +248,10 @@ def desktop_status(db: Session = Depends(get_db)):
             },
             "anthropic_api": {"configured": bool(settings.anthropic_api_key)},
             "openai_api": {"configured": bool(settings.openai_api_key)},
+            "openrouter_api": {
+                "configured": bool(settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")),
+                "model": settings.openrouter_model or os.environ.get("OPENROUTER_MODEL") or "z-ai/glm-5.2",
+            },
         },
     }
 
@@ -401,8 +529,8 @@ def generate_missing_drafts(
             max_turns=12,
             timeout_s=300,
         )
-        ai_run, run_request, provider, cli_path = _prepare_ai_run(db, req)
-        background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path)
+        ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+        background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path, provider_env)
         runs.append({
             "run_id": ai_run.id,
             "professor_id": prof.id,
@@ -521,6 +649,287 @@ def create_activity(a: schemas.ActivityBase, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(act)
     return act
+
+
+@app.get("/api/discovery/coverage", response_model=schemas.DiscoveryCoverageOut)
+def discovery_coverage(db: Session = Depends(get_db)):
+    active_run = (
+        db.query(models.DiscoveryRun)
+        .filter(models.DiscoveryRun.status.in_(["queued", "running"]))
+        .order_by(models.DiscoveryRun.created_at.desc())
+        .first()
+    )
+    latest_run = (
+        db.query(models.DiscoveryRun)
+        .order_by(models.DiscoveryRun.created_at.desc())
+        .first()
+    )
+    recent_logs = (
+        db.query(models.DiscoveryLog)
+        .order_by(models.DiscoveryLog.created_at.desc())
+        .limit(12)
+        .all()
+    )
+    totals = {
+        "runs": db.query(func.count(models.DiscoveryRun.id)).scalar() or 0,
+        "universities": db.query(func.count(models.DiscoveryUniversity.id)).scalar() or 0,
+        "departments": db.query(func.count(models.DiscoveryDepartment.id)).scalar() or 0,
+        "pages": db.query(func.count(models.DiscoveryPage.id)).scalar() or 0,
+        "candidates": db.query(func.count(models.DiscoveryCandidate.id)).scalar() or 0,
+        "verified_candidates": (
+            db.query(func.count(models.DiscoveryCandidate.id))
+            .filter(models.DiscoveryCandidate.verification_status == "verified")
+            .scalar()
+            or 0
+        ),
+        "rejected_candidates": (
+            db.query(func.count(models.DiscoveryCandidate.id))
+            .filter(models.DiscoveryCandidate.verification_status == "rejected")
+            .scalar()
+            or 0
+        ),
+        "evidence_items": db.query(func.count(models.DiscoveryEvidence.id)).scalar() or 0,
+        "logs": db.query(func.count(models.DiscoveryLog.id)).scalar() or 0,
+    }
+    return {
+        "active_run": active_run,
+        "latest_run": latest_run,
+        "totals": totals,
+        "recent_logs": [
+            {
+                "id": row.id,
+                "run_id": row.run_id,
+                "level": row.level,
+                "stage": row.stage,
+                "message": row.message,
+                "payload": row.payload,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in recent_logs
+        ],
+    }
+
+
+@app.post("/api/discovery/runs", response_model=schemas.DiscoveryRunOut, status_code=201)
+def create_discovery_run(
+    payload: schemas.DiscoveryRunCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    countries = parse_country_targets(payload.target_countries)
+    if not countries:
+        raise HTTPException(400, "Select at least one country or supported region before running discovery.")
+
+    target_departments = payload.target_departments
+    if isinstance(target_departments, str):
+        target_departments = [
+            item.strip()
+            for item in re.split(r"[,;\n]+", target_departments)
+            if item.strip()
+        ]
+
+    run = models.DiscoveryRun(
+        status="queued",
+        phase="universities",
+        position_type=payload.position_type,
+        target_countries=countries,
+        target_departments=target_departments if target_departments else None,
+        filters=payload.filters or {},
+        summary="University coverage is queued.",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    db.add(models.DiscoveryLog(
+        run_id=run.id,
+        level="info",
+        stage="universities",
+        message=f"Queued university coverage for {len(countries)} country target(s).",
+        payload={"country_codes": countries},
+    ))
+    db.commit()
+    db.refresh(run)
+    background_tasks.add_task(run_discovery_seed_pipeline, run.id)
+    return run
+
+
+@app.get("/api/discovery/runs/{run_id}", response_model=schemas.DiscoveryRunOut)
+def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
+    run = db.get(models.DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "discovery run not found")
+    return run
+
+
+@app.get("/api/discovery/runs/{run_id}/universities", response_model=List[schemas.DiscoveryUniversityOut])
+def list_discovery_run_universities(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    return (
+        db.query(models.DiscoveryUniversity)
+        .filter(models.DiscoveryUniversity.run_id == run_id)
+        .order_by(models.DiscoveryUniversity.country.asc(), models.DiscoveryUniversity.name.asc())
+        .all()
+    )
+
+
+@app.post("/api/discovery/runs/{run_id}/seed-pages", response_model=schemas.DiscoveryRunOut)
+def seed_discovery_run_pages(
+    run_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    run = db.get(models.DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "discovery run not found")
+    if run.status in {"queued", "running"}:
+        raise HTTPException(409, "discovery run is already active")
+    if run.universities_total <= 0:
+        raise HTTPException(400, "run has no universities to seed")
+    run.status = "queued"
+    run.phase = "departments"
+    run.summary = "Department and page seeding is queued."
+    run.error_message = None
+    run.completed_at = None
+    run.updated_at = datetime.utcnow()
+    db.add(models.DiscoveryLog(
+        run_id=run.id,
+        level="info",
+        stage="departments",
+        message="Queued department and page seeding.",
+    ))
+    db.commit()
+    db.refresh(run)
+    background_tasks.add_task(seed_department_pages_for_run, run.id)
+    return run
+
+
+@app.get("/api/discovery/runs/{run_id}/departments", response_model=List[schemas.DiscoveryDepartmentOut])
+def list_discovery_run_departments(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    return (
+        db.query(models.DiscoveryDepartment)
+        .filter(models.DiscoveryDepartment.run_id == run_id)
+        .order_by(models.DiscoveryDepartment.name.asc())
+        .all()
+    )
+
+
+@app.get("/api/discovery/runs/{run_id}/pages", response_model=List[schemas.DiscoveryPageOut])
+def list_discovery_run_pages(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    return (
+        db.query(models.DiscoveryPage)
+        .filter(models.DiscoveryPage.run_id == run_id)
+        .order_by(models.DiscoveryPage.page_type.asc(), models.DiscoveryPage.url.asc())
+        .limit(1000)
+        .all()
+    )
+
+
+@app.post("/api/discovery/runs/{run_id}/extract-candidates", response_model=schemas.DiscoveryRunOut)
+def extract_discovery_run_candidates(
+    run_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    run = db.get(models.DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "discovery run not found")
+    if run.status in {"queued", "running"}:
+        raise HTTPException(409, "discovery run is already active")
+    if run.directory_pages_found <= 0:
+        raise HTTPException(400, "run has no seeded pages to crawl")
+    run.status = "queued"
+    run.phase = "candidates"
+    run.summary = "Candidate extraction is queued."
+    run.error_message = None
+    run.completed_at = None
+    run.updated_at = datetime.utcnow()
+    db.add(models.DiscoveryLog(
+        run_id=run.id,
+        level="info",
+        stage="candidates",
+        message="Queued candidate extraction.",
+    ))
+    db.commit()
+    db.refresh(run)
+    background_tasks.add_task(extract_candidates_for_run, run.id)
+    return run
+
+
+@app.get("/api/discovery/runs/{run_id}/candidates", response_model=List[schemas.DiscoveryCandidateOut])
+def list_discovery_run_candidates(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    return (
+        db.query(models.DiscoveryCandidate)
+        .filter(models.DiscoveryCandidate.run_id == run_id)
+        .order_by(
+            models.DiscoveryCandidate.verification_status.asc(),
+            models.DiscoveryCandidate.match_score.desc().nullslast(),
+            models.DiscoveryCandidate.name.asc(),
+        )
+        .limit(1000)
+        .all()
+    )
+
+
+@app.post("/api/discovery/runs/{run_id}/verify-candidates")
+def verify_discovery_run_candidates(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    return verify_and_score_candidates_for_run(run_id)
+
+
+@app.post("/api/discovery/candidates/{candidate_id}/promote", response_model=schemas.ProfessorOut)
+def promote_discovery_candidate(candidate_id: int, db: Session = Depends(get_db)):
+    candidate = db.get(models.DiscoveryCandidate, candidate_id)
+    if not candidate:
+        raise HTTPException(404, "discovery candidate not found")
+    if candidate.verification_status == "rejected":
+        raise HTTPException(400, "rejected candidates cannot be promoted")
+    prof = promote_candidate_to_professor(db, candidate_id)
+    if not prof:
+        raise HTTPException(404, "discovery candidate not found")
+    _log(db, f"Promoted discovery candidate: {prof.name}", professor_id=prof.id)
+    return prof
+
+
+@app.post("/api/discovery/runs/{run_id}/promote-verified", response_model=List[schemas.ProfessorOut])
+def promote_verified_discovery_candidates(run_id: int, db: Session = Depends(get_db)):
+    if not db.get(models.DiscoveryRun, run_id):
+        raise HTTPException(404, "discovery run not found")
+    candidates = (
+        db.query(models.DiscoveryCandidate)
+        .filter(models.DiscoveryCandidate.run_id == run_id)
+        .filter(models.DiscoveryCandidate.verification_status == "verified")
+        .filter(models.DiscoveryCandidate.professor_id.is_(None))
+        .order_by(models.DiscoveryCandidate.match_score.desc().nullslast(), models.DiscoveryCandidate.name.asc())
+        .limit(100)
+        .all()
+    )
+    promoted: list[models.Professor] = []
+    for candidate in candidates:
+        prof = promote_candidate_to_professor(db, candidate.id)
+        if prof:
+            promoted.append(prof)
+    return promoted
+
+
+@app.post("/api/discovery/candidates/{candidate_id}/reject", response_model=schemas.DiscoveryCandidateOut)
+def reject_discovery_candidate(candidate_id: int, db: Session = Depends(get_db)):
+    candidate = db.get(models.DiscoveryCandidate, candidate_id)
+    if not candidate:
+        raise HTTPException(404, "discovery candidate not found")
+    candidate.verification_status = "rejected"
+    candidate.rejection_reason = "Rejected during manual review."
+    candidate.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(candidate)
+    return candidate
 
 
 @app.get("/api/stats", response_model=schemas.Stats)
@@ -826,6 +1235,8 @@ def get_settings(db: Session = Depends(get_db)):
         "codex_cli_path": s.codex_cli_path,
         "anthropic_api_key_set": bool(s.anthropic_api_key),
         "openai_api_key_set": bool(s.openai_api_key),
+        "openrouter_api_key_set": bool(s.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")),
+        "openrouter_model": s.openrouter_model or os.environ.get("OPENROUTER_MODEL") or "z-ai/glm-5.2",
         "default_provider_per_workflow": s.default_provider_per_workflow or {},
         "email_tone_rules": s.email_tone_rules or "",
         "daily_cost_cap_usd": s.daily_cost_cap_usd,
@@ -855,7 +1266,7 @@ def patch_settings(payload: dict, db: Session = Depends(get_db)):
     s = _settings_row(db)
     for k in (
         "ai_provider", "claude_cli_path", "codex_cli_path",
-        "anthropic_api_key", "openai_api_key", "email_tone_rules",
+        "anthropic_api_key", "openai_api_key", "openrouter_api_key", "openrouter_model", "email_tone_rules",
         "daily_cost_cap_usd", "ui_density", "default_provider_per_workflow",
         "batch_defaults",
         "gmail_address", "gmail_send_name",
@@ -1135,7 +1546,7 @@ def _reply_out(r: models.EmailReply) -> dict:
 
 async def _draft_reply_response(db: Session, reply: models.EmailReply, instruction: str) -> dict:
     """Run the draft_reply Quill workflow to completion and return {subject, body}."""
-    from .quill import _settings, _select_provider_for, _shim
+    from .quill import _provider_env_for, _settings, _select_provider_for, _shim
     from ai.runner import (
         Workflow, RunRequest, Provider, resolve_cli_path,
         stream as runner_stream, extract_json_payload,
@@ -1168,7 +1579,7 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
 
     parts: list[str] = []
     err: Optional[str] = None
-    async for evt in runner_stream(request, provider=provider, cli_path=cli_path):
+    async for evt in runner_stream(request, provider=provider, cli_path=cli_path, env=_provider_env_for(settings, provider)):
         if evt.kind == "text":
             parts.append(evt.data.get("text", ""))
         elif evt.kind == "error":
@@ -1372,7 +1783,7 @@ def _prof_prompt_dict(prof: models.Professor) -> dict:
 async def _run_workflow_json(db: Session, workflow, params: dict,
                              max_turns: int = 6, timeout_s: int = 240) -> dict:
     """Run a Quill workflow to completion and return the parsed JSON payload."""
-    from .quill import _settings, _select_provider_for
+    from .quill import _provider_env_for, _settings, _select_provider_for
     from ai.runner import RunRequest, Provider, resolve_cli_path, stream as runner_stream, extract_json_payload
 
     settings = _settings(db)
@@ -1386,7 +1797,7 @@ async def _run_workflow_json(db: Session, workflow, params: dict,
     request = RunRequest(workflow=workflow, params=params, max_turns=max_turns, timeout_s=timeout_s)
     parts: list[str] = []
     err: Optional[str] = None
-    async for evt in runner_stream(request, provider=provider, cli_path=cli_path):
+    async for evt in runner_stream(request, provider=provider, cli_path=cli_path, env=_provider_env_for(settings, provider)):
         if evt.kind == "text":
             parts.append(evt.data.get("text", ""))
         elif evt.kind == "error":
@@ -1892,6 +2303,30 @@ def favicon():
     if not path.exists():
         raise HTTPException(404, "not found")
     return FileResponse(str(path))
+
+
+@app.get("/favicon.png", include_in_schema=False)
+def favicon_png():
+    path = STATIC_DIR / "favicon.png"
+    if not path.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    path = STATIC_DIR / "favicon.ico"
+    if not path.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(path), media_type="image/x-icon")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+def apple_touch_icon():
+    path = STATIC_DIR / "apple-touch-icon.png"
+    if not path.exists():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(path), media_type="image/png")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

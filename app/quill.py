@@ -25,7 +25,7 @@ import re
 import shlex
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, AsyncIterator, Optional
 from urllib.parse import urlparse
 
@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ai.runner import (  # noqa: E402
+    DEFAULT_OPENROUTER_MODEL,
     FALLBACK_CHAIN,
     Provider,
     RunRequest,
@@ -151,6 +152,7 @@ def _select_provider_for(settings: models.Settings, preferred: Optional[Provider
         codex_cli_path=settings.codex_cli_path,
         anthropic_api_key=settings.anthropic_api_key,
         openai_api_key=settings.openai_api_key,
+        openrouter_api_key=settings.openrouter_api_key,
     )
 
 
@@ -161,6 +163,7 @@ def _provider_available(settings: models.Settings, provider: Provider) -> bool:
         codex_cli_path=settings.codex_cli_path,
         anthropic_api_key=settings.anthropic_api_key,
         openai_api_key=settings.openai_api_key,
+        openrouter_api_key=settings.openrouter_api_key,
     ) == provider
 
 
@@ -171,6 +174,17 @@ def _select_fallback_provider(settings: models.Settings, failed_provider: str) -
         if _provider_available(settings, provider):
             return provider
     return None
+
+
+def _provider_env_for(settings: models.Settings, provider: Provider) -> Optional[dict[str, str]]:
+    if provider != Provider.OPENROUTER_API:
+        return None
+    return {
+        "OPENROUTER_API_KEY": settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", ""),
+        "OPENROUTER_MODEL": settings.openrouter_model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL,
+        "OPENROUTER_HTTP_REFERER": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost:8000"),
+        "OPENROUTER_TITLE": os.environ.get("OPENROUTER_TITLE", "Quill AI"),
+    }
 
 
 def _run_probe(argv: list[str], timeout_s: int = 8) -> dict[str, Any]:
@@ -359,6 +373,7 @@ def _provider_label(provider: Provider | str) -> str:
         "codex_cli": "Codex",
         "anthropic_api": "Anthropic API",
         "openai_api": "OpenAI API",
+        "openrouter_api": "OpenRouter",
     }.get(value, value.replace("_", " "))
 
 
@@ -523,6 +538,1055 @@ def _shim(obj, default=None):
 class _DotDict(dict):
     def __getattr__(self, k):  # type: ignore[override]
         return self.get(k)
+
+
+# ───────────────────────────────────────────────────────────────────
+# OpenRouter agent tools
+# ───────────────────────────────────────────────────────────────────
+OPENROUTER_TOOL_ALIASES: dict[str, str] = {
+    "dashboard_get_overview": "dashboard.get_overview",
+    "profile_get": "profile.get",
+    "profile_update": "profile.update",
+    "profile_verify_field": "profile.verify_field",
+    "profile_list_section": "profile.list_section",
+    "profile_create_section_item": "profile.create_section_item",
+    "profile_update_section_item": "profile.update_section_item",
+    "professors_search": "professors.search",
+    "professors_get": "professors.get",
+    "professors_update": "professors.update",
+    "papers_list_for_professor": "papers.list_for_professor",
+    "drafts_list": "drafts.list",
+    "drafts_get": "drafts.get",
+    "drafts_create": "drafts.create",
+    "drafts_update": "drafts.update",
+    "drafts_skip": "drafts.skip",
+    "drafts_unskip": "drafts.unskip",
+    "documents_list": "documents.list",
+    "documents_get": "documents.get",
+    "calendar_list_events": "calendar.list_events",
+    "calendar_create_event": "calendar.create_event",
+    "grants_list": "grants.list",
+    "activity_list": "activity.list",
+    "ai_run_workflow": "ai.run_workflow",
+    "ai_get_run": "ai.get_run",
+    "ai_list_runs": "ai.list_runs",
+}
+
+
+def _schema_object(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required or [],
+        "additionalProperties": False,
+    }
+
+
+def _agent_tool_schemas() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "dashboard_get_overview",
+                "description": "Summarize Quill dashboard counts, recent activity, current drafts, and recent AI runs.",
+                "parameters": _schema_object({
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_get",
+                "description": "Read the full user research profile, including education, publications, experience, awards, and references.",
+                "parameters": _schema_object({}),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_update",
+                "description": "Update scalar user profile fields when the user asks Quill to change profile data.",
+                "parameters": _schema_object({
+                    "patch": {"type": "object", "additionalProperties": True},
+                }, ["patch"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_verify_field",
+                "description": "Mark one profile field as verified by the user so future extraction preserves it.",
+                "parameters": _schema_object({
+                    "field_name": {"type": "string"},
+                }, ["field_name"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_list_section",
+                "description": "List repeatable profile records from a section: education, publications, experience, awards, or references.",
+                "parameters": _schema_object({
+                    "section": {"type": "string", "enum": ["education", "publications", "experience", "awards", "references"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                }, ["section"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_create_section_item",
+                "description": "Create a repeatable profile item, such as adding a missing publication, education entry, experience, award, or reference.",
+                "parameters": _schema_object({
+                    "section": {"type": "string", "enum": ["education", "publications", "experience", "awards", "references"]},
+                    "item": {"type": "object", "additionalProperties": True},
+                }, ["section", "item"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "profile_update_section_item",
+                "description": "Update fields on one repeatable profile item by id, such as a publication title/year/venue or experience bullets.",
+                "parameters": _schema_object({
+                    "section": {"type": "string", "enum": ["education", "publications", "experience", "awards", "references"]},
+                    "item_id": {"type": "integer"},
+                    "patch": {"type": "object", "additionalProperties": True},
+                }, ["section", "item_id", "patch"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "professors_search",
+                "description": "Search professors by text, status, tier, research category, university, or suggestion state.",
+                "parameters": _schema_object({
+                    "q": {"type": "string", "description": "Text search over name, lab, notes, and research angle."},
+                    "status": {"type": "string"},
+                    "tier": {"type": "string"},
+                    "category": {"type": "string"},
+                    "university": {"type": "string"},
+                    "is_suggested": {"type": "boolean"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "professors_get",
+                "description": "Load one professor with saved metadata, notes, fit score, and contact fields.",
+                "parameters": _schema_object({
+                    "professor_id": {"type": "integer"},
+                }, ["professor_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "professors_update",
+                "description": "Update saved professor metadata, notes, status, category, URLs, or contact fields when the user asks.",
+                "parameters": _schema_object({
+                    "professor_id": {"type": "integer"},
+                    "patch": {"type": "object", "additionalProperties": True},
+                }, ["professor_id", "patch"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "papers_list_for_professor",
+                "description": "Read saved papers for one professor.",
+                "parameters": _schema_object({
+                    "professor_id": {"type": "integer"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
+                }, ["professor_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_list",
+                "description": "List outreach drafts with professor context. Returns previews, not full bodies.",
+                "parameters": _schema_object({
+                    "professor_id": {"type": "integer"},
+                    "q": {"type": "string"},
+                    "include_skipped": {"type": "boolean", "default": False},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_get",
+                "description": "Read one full outreach draft body before editing or reviewing it.",
+                "parameters": _schema_object({
+                    "draft_id": {"type": "integer"},
+                }, ["draft_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_create",
+                "description": "Create a saved outreach draft for a professor.",
+                "parameters": _schema_object({
+                    "professor_id": {"type": "integer"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                }, ["professor_id", "subject", "body"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_update",
+                "description": "Revise the subject and/or body of one saved outreach draft.",
+                "parameters": _schema_object({
+                    "draft_id": {"type": "integer"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                }, ["draft_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_skip",
+                "description": "Hide a draft from active drafting/batch queues when the user asks to skip it.",
+                "parameters": _schema_object({
+                    "draft_id": {"type": "integer"},
+                }, ["draft_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "drafts_unskip",
+                "description": "Restore a skipped draft to active drafting/batch queues.",
+                "parameters": _schema_object({
+                    "draft_id": {"type": "integer"},
+                }, ["draft_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "documents_list",
+                "description": "List uploaded documents such as CVs, transcripts, sample papers, statements, and templates.",
+                "parameters": _schema_object({
+                    "kind": {"type": "string", "description": "Optional document kind filter, for example cv, transcript, sample_paper, research_statement, cover_letter_tmpl, or other."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "documents_get",
+                "description": "Read one uploaded document's metadata and extracted text. Use this to inspect the text extracted from PDFs, CVs, transcripts, and papers.",
+                "parameters": _schema_object({
+                    "document_id": {"type": "integer"},
+                    "max_chars": {"type": "integer", "minimum": 1000, "maximum": 30000, "default": 12000},
+                }, ["document_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "calendar_list_events",
+                "description": "List saved calendar events, reminders, meetings, and deadlines in an optional date range.",
+                "parameters": _schema_object({
+                    "from_date": {"type": "string", "description": "Optional YYYY-MM-DD lower bound."},
+                    "to_date": {"type": "string", "description": "Optional YYYY-MM-DD upper bound."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "calendar_create_event",
+                "description": "Create a calendar event, reminder, meeting, or deadline when the user asks Quill to add one.",
+                "parameters": _schema_object({
+                    "title": {"type": "string"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD."},
+                    "time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "description": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["event", "reminder", "meeting", "deadline"]},
+                    "all_day": {"type": "boolean"},
+                }, ["title", "date"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grants_list",
+                "description": "List saved grants and fellowships with deadlines, match scores, and notes.",
+                "parameters": _schema_object({
+                    "status": {"type": "string"},
+                    "q": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "activity_list",
+                "description": "Read recent Quill activity timeline entries.",
+                "parameters": _schema_object({
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                }),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ai_run_workflow",
+                "description": "Start a long-running Quill workflow in the background and return its run id.",
+                "parameters": _schema_object({
+                    "workflow": {
+                        "type": "string",
+                        "enum": ["discover_professors", "research_professor", "draft_email", "extract_user_profile_full"],
+                    },
+                    "professor_id": {"type": "integer"},
+                    "document_id": {"type": "integer"},
+                    "params": {"type": "object", "additionalProperties": True},
+                }, ["workflow"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ai_get_run",
+                "description": "Check a Quill AI run status, result, error, and linked entity ids.",
+                "parameters": _schema_object({
+                    "run_id": {"type": "integer"},
+                }, ["run_id"]),
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ai_list_runs",
+                "description": "List recent Quill workflow runs and their statuses.",
+                "parameters": _schema_object({
+                    "workflow": {"type": "string"},
+                    "status": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                }),
+            },
+        },
+    ]
+
+
+def _jsonable(value: Any) -> Any:
+    from datetime import date as _date
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, _date)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if hasattr(value, "__table__"):
+        return {
+            col.name: _jsonable(getattr(value, col.name))
+            for col in value.__table__.columns
+        }
+    return str(value)
+
+
+def _truncate(value: str | None, limit: int = 500) -> str:
+    text = value or ""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "..."
+
+
+def _tool_ok(data: Any) -> dict[str, Any]:
+    return {"ok": True, "data": _jsonable(data)}
+
+
+def _tool_error(message: str) -> dict[str, Any]:
+    return {"ok": False, "error": message}
+
+
+def _log(db: Session, action: str, professor_id: Optional[int] = None, detail: str = "") -> None:
+    db.add(models.Activity(
+        date=date.today(),
+        action=action,
+        detail=detail,
+        professor_id=professor_id,
+    ))
+    db.commit()
+
+
+def _limit_arg(args: dict[str, Any], default: int, cap: int) -> int:
+    try:
+        return max(1, min(int(args.get("limit") or default), cap))
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_chars_arg(args: dict[str, Any], default: int = 12000, cap: int = 30000) -> int:
+    try:
+        return max(1000, min(int(args.get("max_chars") or default), cap))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_model_value(column: Any, value: Any) -> Any:
+    if value == "" and getattr(column, "nullable", False):
+        return None
+    try:
+        py_type = column.type.python_type
+    except (AttributeError, NotImplementedError):
+        return value
+    if value is None or isinstance(value, py_type):
+        return value
+    if py_type is date:
+        return _parse_iso_date(value)
+    if py_type is datetime:
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return value
+    if py_type is bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+    if py_type is int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if py_type is float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def _apply_patch_fields(obj: Any, patch: dict[str, Any], blocked: set[str]) -> list[str]:
+    columns = {col.name: col for col in obj.__table__.columns}
+    changed: list[str] = []
+    for key, value in patch.items():
+        if key in blocked or key not in columns:
+            continue
+        setattr(obj, key, _coerce_model_value(columns[key], value))
+        changed.append(key)
+    return changed
+
+
+def _profile_child_config(section: str) -> tuple[type, set[str]] | None:
+    return _USER_PROFILE_CHILD_SECTIONS.get(section)
+
+
+def _profile_child_query(db: Session, section: str) -> tuple[Any, Any] | None:
+    config = _profile_child_config(section)
+    if not config:
+        return None
+    Model, _allowed = config
+    user = db.get(models.User, 1) or db.query(models.User).first()
+    if not user:
+        return None
+    return Model, db.query(Model).filter_by(user_id=user.id)
+
+
+def _profile_child_payload(row: Any) -> dict[str, Any]:
+    return _jsonable(row)
+
+
+def _profile_child_order(Model: type) -> list[Any]:
+    columns = {col.name: getattr(Model, col.name) for col in Model.__table__.columns}
+    order: list[Any] = []
+    if "order_idx" in columns:
+        order.append(columns["order_idx"].asc())
+    if "year" in columns:
+        order.append(columns["year"].desc().nullslast())
+    if "end_date" in columns:
+        order.append(columns["end_date"].desc().nullslast())
+    order.append(columns["id"].asc())
+    return order
+
+
+def _profile_child_required_error(Model: type, values: dict[str, Any]) -> str | None:
+    if Model is models.UserEducation and not values.get("degree_level"):
+        return "degree_level is required for education."
+    if Model is models.UserPublication and not values.get("title"):
+        return "title is required for publications."
+    if Model is models.UserExperience and not values.get("title"):
+        return "title is required for experience."
+    if Model is models.UserAward and not values.get("name"):
+        return "name is required for awards."
+    if Model is models.UserReference and not values.get("name"):
+        return "name is required for references."
+    return None
+
+
+def _sanitize_profile_child_values(Model: type, raw: dict[str, Any], allowed: set[str]) -> dict[str, Any]:
+    columns = {col.name: col for col in Model.__table__.columns}
+    values: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key not in allowed or key not in columns:
+            continue
+        values[key] = _coerce_model_value(columns[key], value)
+    return values
+
+
+def _profile_payload(db: Session) -> dict[str, Any]:
+    user = db.get(models.User, 1) or db.query(models.User).first()
+    if not user:
+        return {}
+    payload = _jsonable(user)
+    payload["education"] = [_jsonable(row) for row in user.education]
+    payload["publications"] = [_jsonable(row) for row in user.publications]
+    payload["experience"] = [_jsonable(row) for row in user.experience]
+    payload["awards"] = [_jsonable(row) for row in user.awards]
+    payload["references"] = [_jsonable(row) for row in user.references]
+    return payload
+
+
+def _draft_summary(draft: models.EmailDraft) -> dict[str, Any]:
+    prof = draft.professor
+    return {
+        "id": draft.id,
+        "professor_id": draft.professor_id,
+        "professor_name": prof.name if prof else "",
+        "professor_university": prof.university if prof else "",
+        "professor_status": prof.status if prof else "",
+        "professor_email": prof.email if prof else "",
+        "subject": draft.subject or "",
+        "body_preview": _truncate(draft.body, 700),
+        "sent_at": draft.sent_at,
+        "skipped_at": draft.skipped_at,
+        "updated_at": draft.updated_at,
+        "attachment_doc_ids": draft.attachment_doc_ids,
+    }
+
+
+def _draft_full(draft: models.EmailDraft) -> dict[str, Any]:
+    data = _draft_summary(draft)
+    data["body"] = draft.body or ""
+    data.pop("body_preview", None)
+    return data
+
+
+def _run_payload(run: models.AIRun) -> dict[str, Any]:
+    return {
+        "id": run.id,
+        "workflow": run.workflow,
+        "provider": run.provider,
+        "status": run.status,
+        "output": run.output,
+        "error_type": run.error_type,
+        "error_message": run.error_message,
+        "professor_id": run.professor_id,
+        "document_id": run.document_id,
+        "grant_id": run.grant_id,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "duration_ms": run.duration_ms,
+    }
+
+
+def _document_payload(doc: models.Document, max_chars: int = 12000) -> dict[str, Any]:
+    from pathlib import Path
+
+    p = Path(doc.file_path) if doc.file_path else None
+    text = doc.text or ""
+    return {
+        "id": doc.id,
+        "kind": doc.kind,
+        "title": doc.title,
+        "filename": p.name if p else "",
+        "extension": p.suffix.lstrip(".") if p else "",
+        "is_default": doc.is_default,
+        "version": doc.version,
+        "has_text": bool(text.strip()),
+        "text_chars": len(text),
+        "text_returned_chars": min(len(text), max_chars),
+        "text_truncated": len(text) > max_chars,
+        "text": text[:max_chars],
+        "extracted_json": doc.extracted_json,
+        "created_at": doc.created_at,
+        "updated_at": doc.updated_at,
+    }
+
+
+async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    name = OPENROUTER_TOOL_ALIASES.get(raw_name, raw_name)
+    if "_invalid_arguments" in args:
+        return _tool_error(f"Invalid JSON arguments for {name}.")
+
+    try:
+        if name == "dashboard.get_overview":
+            limit = _limit_arg(args, 8, 20)
+            professors = db.query(models.Professor).all()
+            by_status: dict[str, int] = {}
+            by_tier: dict[str, int] = {}
+            for prof in professors:
+                by_status[prof.status or "unknown"] = by_status.get(prof.status or "unknown", 0) + 1
+                by_tier[prof.tier or "unknown"] = by_tier.get(prof.tier or "unknown", 0) + 1
+            drafts = (
+                db.query(models.EmailDraft)
+                .filter(
+                    models.EmailDraft.is_backup == False,  # noqa: E712
+                    models.EmailDraft.sent_at.is_(None),
+                    models.EmailDraft.skipped_at.is_(None),
+                )
+                .order_by(models.EmailDraft.updated_at.desc())
+                .limit(limit)
+                .all()
+            )
+            activity = (
+                db.query(models.Activity)
+                .order_by(models.Activity.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            runs = (
+                db.query(models.AIRun)
+                .order_by(models.AIRun.id.desc())
+                .limit(min(limit, 10))
+                .all()
+            )
+            return _tool_ok({
+                "professor_count": len(professors),
+                "by_status": by_status,
+                "by_tier": by_tier,
+                "active_draft_count": db.query(models.EmailDraft).filter(
+                    models.EmailDraft.is_backup == False,  # noqa: E712
+                    models.EmailDraft.sent_at.is_(None),
+                    models.EmailDraft.skipped_at.is_(None),
+                ).count(),
+                "recent_drafts": [_draft_summary(d) for d in drafts],
+                "recent_activity": [_jsonable(a) for a in activity],
+                "recent_runs": [_run_payload(r) for r in runs],
+            })
+
+        if name == "profile.get":
+            return _tool_ok(_profile_payload(db))
+
+        if name == "profile.update":
+            patch = args.get("patch")
+            if not isinstance(patch, dict) or not patch:
+                return _tool_error("Provide a profile patch object.")
+            user = db.get(models.User, 1) or db.query(models.User).first()
+            if not user:
+                user = models.User(id=1, name="")
+                db.add(user)
+                db.flush()
+            if patch.get("name") is None and "name" in patch:
+                patch = {**patch, "name": ""}
+            changed = _apply_patch_fields(user, patch, {"id", "created_at", "updated_at"})
+            if not changed:
+                return _tool_error("No supported profile fields provided.")
+            user.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(user)
+            _log(db, f"Quill updated profile fields: {', '.join(changed)}")
+            return _tool_ok({"updated": changed, "profile": _profile_payload(db)})
+
+        if name == "profile.verify_field":
+            field_name = str(args.get("field_name") or "").strip()
+            if not field_name:
+                return _tool_error("field_name is required.")
+            user = db.get(models.User, 1) or db.query(models.User).first()
+            if not user:
+                return _tool_error("Profile not found.")
+            prov = dict(user.field_provenance or {})
+            entry = dict(prov.get(field_name) or {})
+            entry["verified_by_user"] = True
+            entry["verified_at"] = datetime.utcnow().isoformat()
+            prov[field_name] = entry
+            user.field_provenance = prov
+            user.updated_at = datetime.utcnow()
+            db.commit()
+            _log(db, f"Quill verified profile field: {field_name}")
+            return _tool_ok({"field": field_name, "provenance": entry})
+
+        if name == "profile.list_section":
+            section = str(args.get("section") or "").strip()
+            result = _profile_child_query(db, section)
+            if not result:
+                return _tool_error("Unknown profile section or profile not found.")
+            Model, query = result
+            rows = (
+                query.order_by(*_profile_child_order(Model))
+                .limit(_limit_arg(args, 50, 100))
+                .all()
+            )
+            return _tool_ok({
+                "section": section,
+                "items": [_profile_child_payload(row) for row in rows],
+            })
+
+        if name == "profile.create_section_item":
+            section = str(args.get("section") or "").strip()
+            item = args.get("item")
+            if not isinstance(item, dict) or not item:
+                return _tool_error("Provide an item object.")
+            config = _profile_child_config(section)
+            if not config:
+                return _tool_error("Unknown profile section.")
+            Model, allowed = config
+            user = db.get(models.User, 1) or db.query(models.User).first()
+            if not user:
+                user = models.User(id=1, name="")
+                db.add(user)
+                db.flush()
+            values = _sanitize_profile_child_values(Model, item, allowed)
+            required_error = _profile_child_required_error(Model, values)
+            if required_error:
+                return _tool_error(required_error)
+            values["user_id"] = user.id
+            if "order_idx" in {col.name for col in Model.__table__.columns}:
+                values["order_idx"] = db.query(Model).filter_by(user_id=user.id).count()
+            row = Model(**values)
+            db.add(row)
+            user.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(row)
+            _log(db, f"Quill added profile {section} item")
+            return _tool_ok({"section": section, "item": _profile_child_payload(row)})
+
+        if name == "profile.update_section_item":
+            section = str(args.get("section") or "").strip()
+            item_id = int(args.get("item_id") or 0)
+            patch = args.get("patch")
+            if not isinstance(patch, dict) or not patch:
+                return _tool_error("Provide a patch object.")
+            result = _profile_child_query(db, section)
+            if not result:
+                return _tool_error("Unknown profile section or profile not found.")
+            Model, query = result
+            row = query.filter(Model.id == item_id).first()
+            if not row:
+                return _tool_error("Profile section item not found.")
+            _Model, allowed = _profile_child_config(section) or (None, set())
+            values = _sanitize_profile_child_values(Model, patch, allowed)
+            if not values:
+                return _tool_error("No supported profile section fields provided.")
+            for key, value in values.items():
+                setattr(row, key, value)
+            user = db.get(models.User, row.user_id)
+            if user:
+                user.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(row)
+            _log(db, f"Quill updated profile {section} item #{row.id}")
+            return _tool_ok({
+                "section": section,
+                "updated": sorted(values.keys()),
+                "item": _profile_child_payload(row),
+            })
+
+        if name == "professors.search":
+            limit = _limit_arg(args, 12, 50)
+            query = db.query(models.Professor)
+            if args.get("status"):
+                query = query.filter(models.Professor.status == str(args["status"]))
+            if args.get("tier"):
+                query = query.filter(models.Professor.tier == str(args["tier"]))
+            if args.get("category"):
+                query = query.filter(models.Professor.research_category == str(args["category"]))
+            if args.get("university"):
+                query = query.filter(models.Professor.university == str(args["university"]))
+            if isinstance(args.get("is_suggested"), bool):
+                query = query.filter(models.Professor.is_suggested == args["is_suggested"])
+            if args.get("q"):
+                like = f"%{str(args['q']).lower()}%"
+                query = query.filter(
+                    (models.Professor.name.ilike(like))
+                    | (models.Professor.dept_lab.ilike(like))
+                    | (models.Professor.notes.ilike(like))
+                    | (models.Professor.research_angle.ilike(like))
+                    | (models.Professor.research_interests.ilike(like))
+                )
+            rows = (
+                query.order_by(
+                    models.Professor.relevance_score.desc().nullslast(),
+                    models.Professor.updated_at.desc(),
+                )
+                .limit(limit)
+                .all()
+            )
+            return _tool_ok([_jsonable(row) for row in rows])
+
+        if name == "professors.get":
+            prof = db.get(models.Professor, int(args.get("professor_id") or 0))
+            return _tool_ok(_jsonable(prof)) if prof else _tool_error("Professor not found.")
+
+        if name == "professors.update":
+            prof = db.get(models.Professor, int(args.get("professor_id") or 0))
+            if not prof:
+                return _tool_error("Professor not found.")
+            patch = args.get("patch")
+            if not isinstance(patch, dict) or not patch:
+                return _tool_error("Provide a professor patch object.")
+            changed = _apply_patch_fields(prof, patch, {"id", "created_at", "updated_at"})
+            if not changed:
+                return _tool_error("No supported professor fields provided.")
+            prof.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(prof)
+            _log(db, f"Quill updated professor fields for {prof.name}: {', '.join(changed)}", professor_id=prof.id)
+            return _tool_ok({"updated": changed, "professor": _jsonable(prof)})
+
+        if name == "papers.list_for_professor":
+            pid = int(args.get("professor_id") or 0)
+            if not db.get(models.Professor, pid):
+                return _tool_error("Professor not found.")
+            rows = (
+                db.query(models.ProfessorPaper)
+                .filter_by(professor_id=pid)
+                .order_by(models.ProfessorPaper.relevance_score.desc(), models.ProfessorPaper.year.desc())
+                .limit(_limit_arg(args, 8, 20))
+                .all()
+            )
+            return _tool_ok([_jsonable(row) for row in rows])
+
+        if name == "drafts.list":
+            query = db.query(models.EmailDraft).filter(models.EmailDraft.is_backup == False)  # noqa: E712
+            if args.get("professor_id"):
+                query = query.filter(models.EmailDraft.professor_id == int(args["professor_id"]))
+            if not args.get("include_skipped"):
+                query = query.filter(models.EmailDraft.skipped_at.is_(None))
+            if args.get("q"):
+                like = f"%{str(args['q']).lower()}%"
+                query = query.filter(
+                    (models.EmailDraft.subject.ilike(like)) | (models.EmailDraft.body.ilike(like))
+                )
+            rows = (
+                query.order_by(models.EmailDraft.updated_at.desc())
+                .limit(_limit_arg(args, 12, 50))
+                .all()
+            )
+            return _tool_ok([_draft_summary(row) for row in rows])
+
+        if name == "drafts.get":
+            draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
+            return _tool_ok(_draft_full(draft)) if draft else _tool_error("Draft not found.")
+
+        if name == "drafts.create":
+            pid = int(args.get("professor_id") or 0)
+            prof = db.get(models.Professor, pid)
+            if not prof:
+                return _tool_error("Professor not found.")
+            subject = str(args.get("subject") or "").strip()
+            body = str(args.get("body") or "").strip()
+            if not subject and not body:
+                return _tool_error("Provide a subject or body.")
+            db.query(models.EmailDraft).filter(
+                models.EmailDraft.professor_id == pid,
+                models.EmailDraft.is_backup == False,  # noqa: E712
+                models.EmailDraft.sent_at.is_(None),
+            ).update({"is_backup": True})
+            draft = models.EmailDraft(
+                professor_id=pid,
+                subject=subject,
+                body=body,
+                ai_generated=False,
+            )
+            db.add(draft)
+            db.commit()
+            db.refresh(draft)
+            _log(db, f"Quill created draft for {prof.name}", professor_id=prof.id)
+            return _tool_ok(_draft_full(draft))
+
+        if name == "drafts.update":
+            draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
+            if not draft:
+                return _tool_error("Draft not found.")
+            changed: list[str] = []
+            if "subject" in args and args["subject"] is not None:
+                draft.subject = str(args["subject"])
+                changed.append("subject")
+            if "body" in args and args["body"] is not None:
+                draft.body = str(args["body"])
+                changed.append("body")
+            if not changed:
+                return _tool_error("Provide subject and/or body to update.")
+            draft.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(draft)
+            if draft.professor:
+                _log(db, f"Quill updated draft {', '.join(changed)} for {draft.professor.name}", professor_id=draft.professor.id)
+            return _tool_ok({"updated": changed, "draft": _draft_full(draft)})
+
+        if name == "drafts.skip":
+            draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
+            if not draft:
+                return _tool_error("Draft not found.")
+            draft.skipped_at = datetime.utcnow()
+            db.commit()
+            db.refresh(draft)
+            _log(db, f"Quill skipped draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
+            return _tool_ok(_draft_full(draft))
+
+        if name == "drafts.unskip":
+            draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
+            if not draft:
+                return _tool_error("Draft not found.")
+            draft.skipped_at = None
+            db.commit()
+            db.refresh(draft)
+            _log(db, f"Quill restored draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
+            return _tool_ok(_draft_full(draft))
+
+        if name == "documents.list":
+            query = db.query(models.Document)
+            if args.get("kind"):
+                query = query.filter(models.Document.kind == str(args["kind"]))
+            rows = (
+                query.order_by(models.Document.is_default.desc(), models.Document.created_at.desc())
+                .limit(_limit_arg(args, 20, 50))
+                .all()
+            )
+            summaries = []
+            for doc in rows:
+                item = _document_payload(doc, 1000)
+                item.pop("text", None)
+                item.pop("extracted_json", None)
+                summaries.append(item)
+            return _tool_ok(summaries)
+
+        if name == "documents.get":
+            doc = db.get(models.Document, int(args.get("document_id") or 0))
+            if not doc:
+                return _tool_error("Document not found.")
+            return _tool_ok(_document_payload(doc, _max_chars_arg(args)))
+
+        if name == "calendar.list_events":
+            from datetime import date as _date
+
+            query = db.query(models.CalendarEvent)
+            if args.get("from_date"):
+                try:
+                    query = query.filter(models.CalendarEvent.date >= _date.fromisoformat(str(args["from_date"])))
+                except ValueError:
+                    return _tool_error("Invalid from_date. Use YYYY-MM-DD.")
+            if args.get("to_date"):
+                try:
+                    query = query.filter(models.CalendarEvent.date <= _date.fromisoformat(str(args["to_date"])))
+                except ValueError:
+                    return _tool_error("Invalid to_date. Use YYYY-MM-DD.")
+            rows = (
+                query.order_by(models.CalendarEvent.date.asc(), models.CalendarEvent.time.asc())
+                .limit(_limit_arg(args, 50, 100))
+                .all()
+            )
+            return _tool_ok([_jsonable(row) for row in rows])
+
+        if name == "calendar.create_event":
+            from datetime import date as _date
+
+            title = str(args.get("title") or "").strip()
+            if not title:
+                return _tool_error("title is required.")
+            try:
+                event_date = _date.fromisoformat(str(args.get("date") or ""))
+            except ValueError:
+                return _tool_error("Invalid date. Use YYYY-MM-DD.")
+            event = models.CalendarEvent(
+                title=title,
+                date=event_date,
+                time=args.get("time"),
+                end_time=args.get("end_time"),
+                description=args.get("description"),
+                kind=str(args.get("kind") or "event"),
+                all_day=bool(args.get("all_day")) if args.get("all_day") is not None else True,
+            )
+            db.add(event)
+            db.commit()
+            db.refresh(event)
+            _log(db, f"Quill added calendar event: {event.title}")
+            return _tool_ok(_jsonable(event))
+
+        if name == "grants.list":
+            query = db.query(models.Grant)
+            if args.get("status"):
+                query = query.filter(models.Grant.status == str(args["status"]))
+            if args.get("q"):
+                like = f"%{str(args['q']).lower()}%"
+                query = query.filter(
+                    (models.Grant.name.ilike(like))
+                    | (models.Grant.eligibility.ilike(like))
+                    | (models.Grant.notes.ilike(like))
+                    | (models.Grant.region.ilike(like))
+                )
+            rows = (
+                query.order_by(models.Grant.match_score.desc().nullslast(), models.Grant.id.desc())
+                .limit(_limit_arg(args, 20, 50))
+                .all()
+            )
+            return _tool_ok([_jsonable(row) for row in rows])
+
+        if name == "activity.list":
+            rows = (
+                db.query(models.Activity)
+                .order_by(models.Activity.created_at.desc())
+                .limit(_limit_arg(args, 20, 100))
+                .all()
+            )
+            return _tool_ok([_jsonable(row) for row in rows])
+
+        if name == "ai.run_workflow":
+            workflow = str(args.get("workflow") or "")
+            if workflow not in {"discover_professors", "research_professor", "draft_email", "extract_user_profile_full"}:
+                return _tool_error("Unsupported workflow for agent tool.")
+            req = RunIn(
+                workflow=workflow,
+                params=args.get("params") if isinstance(args.get("params"), dict) else {},
+                professor_id=args.get("professor_id"),
+                document_id=args.get("document_id"),
+                preferred_provider=Provider.OPENROUTER_API.value,
+                max_turns=12,
+                timeout_s=300,
+            )
+            ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+            asyncio.create_task(_drain_run(ai_run.id, run_request, provider, cli_path, provider_env))
+            return _tool_ok({
+                "id": ai_run.id,
+                "workflow": ai_run.workflow,
+                "status": ai_run.status,
+                "provider": ai_run.provider,
+                "professor_id": ai_run.professor_id,
+                "document_id": ai_run.document_id,
+            })
+
+        if name == "ai.get_run":
+            run = db.get(models.AIRun, int(args.get("run_id") or 0))
+            return _tool_ok(_run_payload(run)) if run else _tool_error("AI run not found.")
+
+        if name == "ai.list_runs":
+            query = db.query(models.AIRun)
+            if args.get("workflow"):
+                query = query.filter(models.AIRun.workflow == str(args["workflow"]))
+            if args.get("status"):
+                query = query.filter(models.AIRun.status == str(args["status"]))
+            rows = (
+                query.order_by(models.AIRun.id.desc())
+                .limit(_limit_arg(args, 20, 50))
+                .all()
+            )
+            return _tool_ok([_run_payload(run) for run in rows])
+
+        return _tool_error(f"Unknown tool: {name}")
+    except HTTPException as exc:
+        return _tool_error(str(exc.detail))
+    except Exception as exc:
+        return _tool_error(str(exc))
 
 
 _DISCOVERY_PAPER_STOPWORDS = {
@@ -1244,7 +2308,13 @@ def _build_user_extraction_context(db: Session, request: RunRequest) -> None:
 # ───────────────────────────────────────────────────────────────────
 # Streaming
 # ───────────────────────────────────────────────────────────────────
-async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, cli_path: Optional[str]) -> AsyncIterator[bytes]:
+async def _run_and_stream(
+    run_id: int,
+    request: RunRequest,
+    provider: Provider,
+    cli_path: Optional[str],
+    provider_env: Optional[dict[str, str]] = None,
+) -> AsyncIterator[bytes]:
     """The actual SSE generator. Updates the AIRun row inline."""
     # We open our own DB session in this generator because the request-scoped
     # session from FastAPI may close before the stream ends.
@@ -1336,9 +2406,14 @@ async def _run_and_stream(run_id: int, request: RunRequest, provider: Provider, 
                     for p in papers
                 ]
 
+        if provider == Provider.OPENROUTER_API and request.workflow == Workflow.CHAT:
+            request.openrouter_tools = _agent_tool_schemas()
+            request.openrouter_tool_aliases = OPENROUTER_TOOL_ALIASES
+            request.tool_executor = lambda name, args: _execute_agent_tool(db, name, args)
+
         got_done = False
         try:
-            async for evt in runner_stream(request, provider=provider, cli_path=cli_path):
+            async for evt in runner_stream(request, provider=provider, cli_path=cli_path, env=provider_env):
                 if evt.kind == "text":
                     full_text_parts.append(evt.data.get("text", ""))
                 if evt.kind == "error":
@@ -1456,7 +2531,7 @@ def _prepare_ai_run(
     *,
     provider_override: Optional[Provider] = None,
     retry_of_run_id: Optional[int] = None,
-) -> tuple[models.AIRun, RunRequest, Provider, Optional[str]]:
+) -> tuple[models.AIRun, RunRequest, Provider, Optional[str], Optional[dict[str, str]]]:
     try:
         workflow = Workflow(req.workflow)
     except ValueError:
@@ -1507,6 +2582,7 @@ def _prepare_ai_run(
         resolve_cli_path("codex", settings.codex_cli_path) if provider == Provider.CODEX_CLI else
         None
     )
+    provider_env = _provider_env_for(settings, provider)
 
     # Hydrate the user/professor/document/grant Jinja vars if the prompt expects them.
     base_ctx = _resolve_user_context(db)
@@ -1564,11 +2640,17 @@ def _prepare_ai_run(
     db.add(ai_run)
     db.commit()
     db.refresh(ai_run)
-    return ai_run, run_request, provider, cli_path
+    return ai_run, run_request, provider, cli_path, provider_env
 
 
-async def _drain_run(run_id: int, request: RunRequest, provider: Provider, cli_path: Optional[str]) -> None:
-    async for _ in _run_and_stream(run_id, request, provider, cli_path):
+async def _drain_run(
+    run_id: int,
+    request: RunRequest,
+    provider: Provider,
+    cli_path: Optional[str],
+    provider_env: Optional[dict[str, str]] = None,
+) -> None:
+    async for _ in _run_and_stream(run_id, request, provider, cli_path, provider_env):
         pass
 
 
@@ -1579,10 +2661,10 @@ def run_workflow(req: RunIn, request: Request, db: Session = Depends(get_db)):
     The first event is `run_id` — the client should capture it.
     """
     _verify_ai_request(request)
-    ai_run, run_request, provider, cli_path = _prepare_ai_run(db, req)
+    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
 
     return StreamingResponse(
-        _run_and_stream(ai_run.id, run_request, provider, cli_path),
+        _run_and_stream(ai_run.id, run_request, provider, cli_path, provider_env),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1601,8 +2683,8 @@ def start_background_workflow(
 ):
     """Start a workflow and keep draining it after the HTTP response closes."""
     _verify_ai_request(request)
-    ai_run, run_request, provider, cli_path = _prepare_ai_run(db, req)
-    background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path)
+    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+    background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path, provider_env)
     return ai_run
 
 
@@ -1663,7 +2745,7 @@ def retry_run(
             raise HTTPException(503, f"Original provider '{old.provider}' is not available.")
 
     req = _rehydrate_run_input(old.request_json)
-    new_run, run_request, provider, cli_path = _prepare_ai_run(
+    new_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(
         db,
         req,
         provider_override=provider_override,
@@ -1676,7 +2758,7 @@ def retry_run(
             f"Restarted as AI run #{new_run.id}."
         )
         db.commit()
-    background_tasks.add_task(_drain_run, new_run.id, run_request, provider, cli_path)
+    background_tasks.add_task(_drain_run, new_run.id, run_request, provider, cli_path, provider_env)
     return new_run
 
 
@@ -1714,6 +2796,10 @@ def providers_status(db: Session = Depends(get_db)):
         },
         "anthropic_api": {"configured": bool(s.anthropic_api_key)},
         "openai_api": {"configured": bool(s.openai_api_key)},
+        "openrouter_api": {
+            "configured": bool(s.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")),
+            "model": s.openrouter_model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL,
+        },
         "active": (_select_provider_for(s).value if _select_provider_for(s) else None),
         "daily_cost_cap_usd": s.daily_cost_cap_usd,
     }
