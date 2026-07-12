@@ -147,14 +147,14 @@ class UserContext:
     categories: set[str]
     position_type: str  # "phd" | "postdoc" | "master" | ""
     country: Optional[str]
+    embedding: Optional[list[float]] = None  # discovery_v2 semantic key (may be None)
 
     @classmethod
-    def from_db(cls, db: Session) -> "UserContext":
-        user = db.query(models.User).first()
+    def from_db(cls, db: Session, user: Optional[models.User]) -> "UserContext":
         # Best CV/document fallback: also pull the latest CV document text
         cv_doc = (
             db.query(models.Document)
-            .filter(models.Document.kind == "cv")
+            .filter(models.Document.kind == "cv", models.Document.user_id == (user.id if user else None))
             .order_by(models.Document.updated_at.desc())
             .first()
         )
@@ -177,6 +177,12 @@ class UserContext:
         elif "master" in role_lower or "msc" in role_lower:
             position = "master"
 
+        embedding = None
+        if user is not None:
+            emb = getattr(user, "discovery_embedding", None)
+            if isinstance(emb, list) and emb:
+                embedding = emb
+
         return cls(
             interests_text=combined,
             interest_tokens=_tokenize(combined),
@@ -184,6 +190,7 @@ class UserContext:
             categories={c.lower() for c in cats if c},
             position_type=position,
             country=(user.country if user else None) or None,
+            embedding=embedding,
         )
 
 
@@ -346,7 +353,8 @@ def score_professor(
     can render an explanation.
     """
     if ctx is None:
-        ctx = UserContext.from_db(db)
+        owner = db.get(models.User, prof.user_id) if prof.user_id else None
+        ctx = UserContext.from_db(db, owner)
     papers = (
         db.query(models.ProfessorPaper)
         .filter_by(professor_id=prof.id)
@@ -379,10 +387,129 @@ def score_professor(
     return score, breakdown
 
 
-def score_all_professors(db: Session) -> int:
-    """Recompute scores for every professor. Returns count updated."""
-    ctx = UserContext.from_db(db)
-    profs = db.query(models.Professor).all()
+# ─────────────────────────────────────────────────────────────────────
+# Discovery v2 — candidate (retrieved author) scoring
+# ─────────────────────────────────────────────────────────────────────
+# Semantic-first weights (sum to 1.0). Used by discovery_v2 Phase C on
+# OpenAlex-retrieved author candidates, which carry different signals than the
+# richer professor rows scored above.
+CANDIDATE_WEIGHTS = {
+    "semantic_alignment": 0.40,   # cosine(user, candidate); Jaccard fallback
+    "topic_match_count":  0.20,   # recent papers in the user's topics
+    "career_stage_fit":   0.12,   # early-career boost for phd/postdoc seekers
+    "publication_recency": 0.10,
+    "output_citation":    0.08,   # log-scaled works + h-index
+    "venue_prestige":     0.05,   # neutral when no per-paper venue data
+    "has_contact":        0.05,   # verified profile/email present
+}
+assert abs(sum(CANDIDATE_WEIGHTS.values()) - 1.0) < 1e-6, "candidate weights must sum to 1.0"
+
+# Topic-match count that saturates the topic component.
+_TOPIC_MATCH_SATURATION = 6.0
+
+
+def classify_career_stage(earliest_year: Optional[int]) -> Optional[str]:
+    """Rough career stage from an author's earliest active year.
+
+    OpenAlex `counts_by_year` only spans recent years, so this is a floor on
+    seniority, not exact — but good enough to boost early-career faculty (who
+    hire PhDs/postdocs most). Returns "early" | "mid" | "senior" | None.
+    """
+    if not earliest_year:
+        return None
+    years_active = max(0, datetime.utcnow().year - int(earliest_year))
+    if years_active <= 8:
+        return "early"
+    if years_active <= 18:
+        return "mid"
+    return "senior"
+
+
+def _career_stage_fit(ctx: UserContext, stage: Optional[str]) -> float:
+    """Early-career faculty hire trainees most, so boost them when the user is
+    seeking a PhD/postdoc/master position. Neutral otherwise."""
+    if ctx.position_type not in {"phd", "postdoc", "master"}:
+        return 0.5
+    return {"early": 1.0, "mid": 0.6, "senior": 0.35}.get(stage or "", 0.5)
+
+
+def score_candidate(ctx: UserContext, cand: dict) -> tuple[int, dict, list[str]]:
+    """Score one discovery-v2 author candidate. Returns (0-100, breakdown, reasons).
+
+    `cand` is a plain dict so this is trivially unit-testable. Expected keys
+    (all optional, sensibly defaulted): semantic_score (cosine, may be None),
+    text (for Jaccard fallback), topic_match_count, career_stage, works_count,
+    cited_by_count, h_index, last_pub_year, has_contact.
+    """
+    # Semantic alignment — cosine already computed by discovery_v2 (may be None).
+    sem = cand.get("semantic_score")
+    if sem is None:
+        prof_tokens = _tokenize(cand.get("text") or "")
+        semantic = _safe_clamp(_jaccard(ctx.interest_tokens, prof_tokens) * 4.0)
+    else:
+        semantic = _safe_clamp(float(sem))  # cosine in [-1,1] -> clamp negatives to 0
+
+    topic_count = int(cand.get("topic_match_count") or 0)
+    topic = _safe_clamp(topic_count / _TOPIC_MATCH_SATURATION)
+
+    stage = cand.get("career_stage")
+    career = _career_stage_fit(ctx, stage)
+
+    last_year = cand.get("last_pub_year")
+    if last_year:
+        age = max(0, datetime.utcnow().year - int(last_year))
+        recency = _safe_clamp(math.exp(-0.5 * age))
+    else:
+        recency = 0.5  # appeared in a recent-works query, but exact year unknown
+
+    works = float(cand.get("works_count") or 0)
+    h = float(cand.get("h_index") or 0)
+    output = _safe_clamp(0.5 * min(1.0, math.log10(1 + works) / math.log10(300))
+                         + 0.5 * min(1.0, h / 40.0))
+
+    venue = DEFAULT_VENUE_SCORE  # no per-paper venue data at retrieval time
+    contact = 1.0 if cand.get("has_contact") else 0.0
+
+    components = {
+        "semantic_alignment": semantic,
+        "topic_match_count": topic,
+        "career_stage_fit": career,
+        "publication_recency": recency,
+        "output_citation": output,
+        "venue_prestige": venue,
+        "has_contact": contact,
+    }
+    contributions = {k: round(CANDIDATE_WEIGHTS[k] * v * 100, 1) for k, v in components.items()}
+    score = max(0, min(100, int(round(sum(contributions.values())))))
+
+    reasons: list[str] = []
+    if semantic >= 0.5:
+        reasons.append("strong research alignment with your profile")
+    if topic_count:
+        reasons.append(f"{topic_count} recent paper(s) in your topics")
+    if ctx.position_type in {"phd", "postdoc", "master"} and stage == "early":
+        reasons.append("early-career faculty (more likely to hire)")
+    if h:
+        reasons.append(f"h-index {int(h)}")
+    if cand.get("has_contact"):
+        reasons.append("contact info found")
+
+    breakdown = {
+        "components": {k: round(v, 3) for k, v in components.items()},
+        "weights": CANDIDATE_WEIGHTS,
+        "contributions": contributions,
+        "total": score,
+        "career_stage": stage,
+        "user_position_type": ctx.position_type,
+    }
+    return score, breakdown, reasons[:6]
+
+
+def score_all_professors(db: Session, user_id: int) -> int:
+    """Recompute scores for every professor belonging to `user_id`. Returns count updated."""
+    user = db.get(models.User, user_id)
+    ctx = UserContext.from_db(db, user)
+    profs = db.query(models.Professor).filter(models.Professor.user_id == user_id).all()
     now = datetime.utcnow()
     for p in profs:
         s, br = score_professor(db, p, ctx)

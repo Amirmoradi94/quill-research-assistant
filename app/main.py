@@ -1,9 +1,6 @@
-import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 import shutil
 import subprocess
 import tempfile
@@ -24,16 +21,15 @@ from . import models, schemas
 from .seed import seed_if_empty
 from .quill import RunIn, _drain_run, _prepare_ai_run, router as quill_router
 from .documents import router as documents_router
-from .user_profile import _user as get_user_singleton, router as user_router
+from .user_profile import router as user_router
+from .auth import get_current_user, has_valid_session, router as auth_router
+from .admin import router as admin_router
 from . import scoring
 from .discovery import (
-    extract_candidates_for_run,
     parse_country_targets,
     promote_candidate_to_professor,
-    run_discovery_seed_pipeline,
-    seed_department_pages_for_run,
-    verify_and_score_candidates_for_run,
 )
+from .discovery_v2 import run_discovery_pipeline
 from .runtime import data_dir, db_path, documents_dir, is_desktop_mode
 
 Base.metadata.create_all(bind=engine)
@@ -83,41 +79,11 @@ if not is_desktop_mode() or os.environ.get("POSTDOC_SEED_APPLICATIONS", "").lowe
     seed_if_empty()
 
 app = FastAPI(title="Quill AI", version="1.0.0")
+app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(quill_router)
 app.include_router(documents_router)
 app.include_router(user_router)
-
-
-WEB_LOGIN_USERNAME = os.environ.get("POSTDOC_WEB_USERNAME", "amir")
-WEB_LOGIN_PASSWORD = os.environ.get("POSTDOC_WEB_PASSWORD", "quill")
-WEB_AUTH_SECRET = os.environ.get("POSTDOC_WEB_AUTH_SECRET") or os.environ.get("SECRET_KEY") or "quill-dev-web-secret"
-WEB_AUTH_COOKIE = "quill_session"
-
-
-def _sign_session(username: str) -> str:
-    issued = str(int(datetime.utcnow().timestamp()))
-    nonce = secrets.token_urlsafe(16)
-    payload = f"{username}:{issued}:{nonce}"
-    sig = hmac.new(WEB_AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{payload}:{sig}"
-
-
-def _valid_session(value: Optional[str]) -> bool:
-    if not value:
-        return False
-    parts = value.split(":")
-    if len(parts) != 4:
-        return False
-    username, issued, nonce, sig = parts
-    payload = f"{username}:{issued}:{nonce}"
-    expected = hmac.new(WEB_AUTH_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, sig):
-        return False
-    try:
-        age = int(datetime.utcnow().timestamp()) - int(issued)
-    except ValueError:
-        return False
-    return username == WEB_LOGIN_USERNAME and 0 <= age <= 60 * 60 * 24 * 14
 
 
 @app.middleware("http")
@@ -130,46 +96,9 @@ async def _web_auth_middleware(request: Request, call_next):
         or is_desktop_mode()
     ):
         return await call_next(request)
-    if not _valid_session(request.cookies.get(WEB_AUTH_COOKIE)):
+    if not has_valid_session(request):
         return JSONResponse({"detail": "Authentication required."}, status_code=401)
     return await call_next(request)
-
-
-class LoginBody(BaseModel):
-    username: str = ""
-    password: str = ""
-
-
-@app.get("/api/auth/status")
-def auth_status(request: Request):
-    return {
-        "authenticated": is_desktop_mode() or _valid_session(request.cookies.get(WEB_AUTH_COOKIE)),
-        "username": WEB_LOGIN_USERNAME,
-    }
-
-
-@app.post("/api/auth/login")
-def auth_login(payload: LoginBody):
-    if payload.username.strip() != WEB_LOGIN_USERNAME or payload.password != WEB_LOGIN_PASSWORD:
-        raise HTTPException(401, "Invalid username or password.")
-    response = JSONResponse({"ok": True, "username": WEB_LOGIN_USERNAME})
-    response.set_cookie(
-        WEB_AUTH_COOKIE,
-        _sign_session(WEB_LOGIN_USERNAME),
-        httponly=True,
-        samesite="lax",
-        secure=os.environ.get("POSTDOC_WEB_SECURE_COOKIE", "").lower() in {"1", "true", "yes"},
-        max_age=60 * 60 * 24 * 14,
-        path="/",
-    )
-    return response
-
-
-@app.post("/api/auth/logout")
-def auth_logout():
-    response = JSONResponse({"ok": True})
-    response.delete_cookie(WEB_AUTH_COOKIE, path="/")
-    return response
 
 
 @app.on_event("startup")
@@ -220,12 +149,12 @@ def health():
 
 
 @app.get("/api/desktop/status")
-def desktop_status(db: Session = Depends(get_db)):
+def desktop_status(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Runtime status used by the desktop shell and first-run setup."""
-    from .quill import _select_provider_for, _settings
+    from .quill import _select_provider_for
     from ai.runner import resolve_cli_path
 
-    settings = _settings(db)
+    settings = _settings_row(db, current_user)
     active = _select_provider_for(settings)
     claude_path = resolve_cli_path("claude", settings.claude_cli_path)
     codex_path = resolve_cli_path("codex", settings.codex_cli_path)
@@ -263,9 +192,10 @@ def list_professors(
     university: Optional[str] = None,
     category: Optional[str] = None,
     q: Optional[str] = None,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(models.Professor)
+    query = db.query(models.Professor).filter(models.Professor.user_id == current_user.id)
     if tier:
         query = query.filter(models.Professor.tier == tier)
     if status:
@@ -301,10 +231,10 @@ def list_professors(
 
 
 @app.post("/api/professors/{pid}/score")
-def compute_professor_score(pid: int, db: Session = Depends(get_db)):
+def compute_professor_score(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Recompute relevance score for a single professor."""
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "not found")
     score, breakdown = scoring.score_professor(db, prof)
     prof.relevance_score = score
@@ -315,34 +245,34 @@ def compute_professor_score(pid: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/professors/score-all")
-def compute_all_professor_scores(db: Session = Depends(get_db)):
+def compute_all_professor_scores(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Recompute relevance scores for every professor."""
-    count = scoring.score_all_professors(db)
+    count = scoring.score_all_professors(db, current_user.id)
     return {"updated": count}
 
 
 @app.post("/api/professors", response_model=schemas.ProfessorOut, status_code=201)
-def create_professor(p: schemas.ProfessorCreate, db: Session = Depends(get_db)):
-    prof = models.Professor(**p.model_dump())
+def create_professor(p: schemas.ProfessorCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    prof = models.Professor(user_id=current_user.id, **p.model_dump())
     db.add(prof)
     db.commit()
     db.refresh(prof)
-    _log(db, f"Added professor: {prof.name}", professor_id=prof.id)
+    _log(db, current_user.id, f"Added professor: {prof.name}", professor_id=prof.id)
     return prof
 
 
 @app.get("/api/professors/{pid}", response_model=schemas.ProfessorOut)
-def get_professor(pid: int, db: Session = Depends(get_db)):
+def get_professor(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "not found")
     return prof
 
 
 @app.get("/api/professors/{pid}/papers")
-def get_professor_papers(pid: int, db: Session = Depends(get_db)):
+def get_professor_papers(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "not found")
     papers = (
         db.query(models.ProfessorPaper)
@@ -368,9 +298,9 @@ def get_professor_papers(pid: int, db: Session = Depends(get_db)):
 
 
 @app.patch("/api/professors/{pid}", response_model=schemas.ProfessorOut)
-def update_professor(pid: int, patch: schemas.ProfessorUpdate, db: Session = Depends(get_db)):
+def update_professor(pid: int, patch: schemas.ProfessorUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "not found")
     data = patch.model_dump(exclude_unset=True)
     old_status = prof.status
@@ -381,6 +311,7 @@ def update_professor(pid: int, patch: schemas.ProfessorUpdate, db: Session = Dep
     if "status" in data and data["status"] != old_status:
         _log(
             db,
+            current_user.id,
             f"{prof.name}: {old_status} → {data['status']}",
             professor_id=prof.id,
         )
@@ -388,26 +319,31 @@ def update_professor(pid: int, patch: schemas.ProfessorUpdate, db: Session = Dep
 
 
 @app.delete("/api/professors/{pid}", status_code=204)
-def delete_professor(pid: int, db: Session = Depends(get_db)):
+def delete_professor(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "not found")
     name = prof.name
     db.delete(prof)
     db.commit()
-    _log(db, f"Deleted professor: {name}")
+    _log(db, current_user.id, f"Deleted professor: {name}")
 
 
 @app.get("/api/grants", response_model=List[schemas.GrantOut])
 @app.get("/api/fellowships", response_model=List[schemas.GrantOut], include_in_schema=False)
-def list_grants(db: Session = Depends(get_db)):
-    return db.query(models.Grant).order_by(models.Grant.id.asc()).all()
+def list_grants(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return (
+        db.query(models.Grant)
+        .filter(models.Grant.user_id == current_user.id)
+        .order_by(models.Grant.id.asc())
+        .all()
+    )
 
 
 @app.post("/api/grants", response_model=schemas.GrantOut, status_code=201)
 @app.post("/api/fellowships", response_model=schemas.GrantOut, status_code=201, include_in_schema=False)
-def create_grant(f: schemas.GrantBase, db: Session = Depends(get_db)):
-    g = models.Grant(**f.model_dump())
+def create_grant(f: schemas.GrantBase, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    g = models.Grant(user_id=current_user.id, **f.model_dump())
     db.add(g)
     db.commit()
     db.refresh(g)
@@ -416,9 +352,9 @@ def create_grant(f: schemas.GrantBase, db: Session = Depends(get_db)):
 
 @app.patch("/api/grants/{gid}", response_model=schemas.GrantOut)
 @app.patch("/api/fellowships/{gid}", response_model=schemas.GrantOut, include_in_schema=False)
-def update_grant(gid: int, patch: schemas.GrantUpdate, db: Session = Depends(get_db)):
+def update_grant(gid: int, patch: schemas.GrantUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = db.get(models.Grant, gid)
-    if not g:
+    if not g or g.user_id != current_user.id:
         raise HTTPException(404, "not found")
     for k, v in patch.model_dump(exclude_unset=True).items():
         setattr(g, k, v)
@@ -429,17 +365,19 @@ def update_grant(gid: int, patch: schemas.GrantUpdate, db: Session = Depends(get
 
 @app.delete("/api/grants/{gid}", status_code=204)
 @app.delete("/api/fellowships/{gid}", status_code=204, include_in_schema=False)
-def delete_grant(gid: int, db: Session = Depends(get_db)):
+def delete_grant(gid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     g = db.get(models.Grant, gid)
-    if not g:
+    if not g or g.user_id != current_user.id:
         raise HTTPException(404, "not found")
     db.delete(g)
     db.commit()
 
 
 @app.get("/api/drafts", response_model=List[schemas.DraftWithProfessor])
-def list_drafts(professor_id: Optional[int] = None, q: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(models.EmailDraft).filter(models.EmailDraft.is_backup == False)
+def list_drafts(professor_id: Optional[int] = None, q: Optional[str] = None, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = db.query(models.EmailDraft).filter(
+        models.EmailDraft.is_backup == False, models.EmailDraft.user_id == current_user.id
+    )
     if professor_id:
         query = query.filter(models.EmailDraft.professor_id == professor_id)
     if q:
@@ -488,6 +426,7 @@ class GenerateDraftsBody(BaseModel):
 def generate_missing_drafts(
     payload: GenerateDraftsBody,
     background_tasks: BackgroundTasks,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """User-triggered draft generation for accepted professors without active drafts."""
@@ -496,6 +435,7 @@ def generate_missing_drafts(
         row[0]
         for row in db.query(models.EmailDraft.professor_id)
         .filter(
+            models.EmailDraft.user_id == current_user.id,
             models.EmailDraft.is_backup == False,  # noqa: E712
             models.EmailDraft.sent_at.is_(None),
         )
@@ -503,6 +443,7 @@ def generate_missing_drafts(
     }
 
     query = db.query(models.Professor).filter(
+        models.Professor.user_id == current_user.id,
         models.Professor.status == "drafting",
         models.Professor.is_suggested == False,  # noqa: E712
         models.Professor.dismissed_at.is_(None),
@@ -529,7 +470,7 @@ def generate_missing_drafts(
             max_turns=12,
             timeout_s=300,
         )
-        ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+        ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, current_user, req)
         background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path, provider_env)
         runs.append({
             "run_id": ai_run.id,
@@ -539,7 +480,7 @@ def generate_missing_drafts(
         })
 
     if runs:
-        _log(db, f"Started {len(runs)} user-requested draft generation run(s)")
+        _log(db, current_user.id, f"Started {len(runs)} user-requested draft generation run(s)")
 
     return {
         "ok": True,
@@ -550,37 +491,37 @@ def generate_missing_drafts(
 
 
 @app.post("/api/drafts", response_model=schemas.DraftOut, status_code=201)
-def create_draft(d: schemas.DraftBase, db: Session = Depends(get_db)):
+def create_draft(d: schemas.DraftBase, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prof = db.get(models.Professor, d.professor_id)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "professor not found")
     existing = (
         db.query(models.EmailDraft)
-        .filter(models.EmailDraft.professor_id == d.professor_id)
+        .filter(models.EmailDraft.professor_id == d.professor_id, models.EmailDraft.user_id == current_user.id)
         .first()
     )
     if existing:
         return existing
-    draft = models.EmailDraft(**d.model_dump())
+    draft = models.EmailDraft(user_id=current_user.id, **d.model_dump())
     db.add(draft)
     db.commit()
     db.refresh(draft)
-    _log(db, f"Started email draft for {prof.name}", professor_id=prof.id)
+    _log(db, current_user.id, f"Started email draft for {prof.name}", professor_id=prof.id)
     return draft
 
 
 @app.get("/api/drafts/{did}", response_model=schemas.DraftOut)
-def get_draft(did: int, db: Session = Depends(get_db)):
+def get_draft(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "not found")
     return d
 
 
 @app.patch("/api/drafts/{did}", response_model=schemas.DraftOut)
-def update_draft(did: int, patch: schemas.DraftUpdate, db: Session = Depends(get_db)):
+def update_draft(did: int, patch: schemas.DraftUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "not found")
     for k, v in patch.model_dump(exclude_unset=True).items():
         setattr(d, k, v)
@@ -590,18 +531,18 @@ def update_draft(did: int, patch: schemas.DraftUpdate, db: Session = Depends(get
 
 
 @app.delete("/api/drafts/{did}", status_code=204)
-def delete_draft(did: int, db: Session = Depends(get_db)):
+def delete_draft(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "not found")
     db.delete(d)
     db.commit()
 
 
 @app.post("/api/drafts/{did}/mark_sent", response_model=schemas.ProfessorOut)
-def mark_draft_sent(did: int, db: Session = Depends(get_db)):
+def mark_draft_sent(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "not found")
     prof = d.professor
     if not prof:
@@ -615,15 +556,19 @@ def mark_draft_sent(did: int, db: Session = Depends(get_db)):
     prof.date_sent = date.today()
     db.commit()
     db.refresh(prof)
-    _log(db, f"{prof.name}: {old} → sent (via draft)", professor_id=prof.id)
+    _log(db, current_user.id, f"{prof.name}: {old} → sent (via draft)", professor_id=prof.id)
     return prof
 
 
 @app.get("/api/professors/{pid}/draft", response_model=Optional[schemas.DraftOut])
-def get_professor_draft(pid: int, db: Session = Depends(get_db)):
+def get_professor_draft(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = (
         db.query(models.EmailDraft)
-        .filter(models.EmailDraft.professor_id == pid, models.EmailDraft.is_backup == False)
+        .filter(
+            models.EmailDraft.professor_id == pid,
+            models.EmailDraft.user_id == current_user.id,
+            models.EmailDraft.is_backup == False,
+        )
         .order_by(models.EmailDraft.created_at.desc())
         .first()
     )
@@ -631,9 +576,10 @@ def get_professor_draft(pid: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/activity", response_model=List[schemas.ActivityOut])
-def list_activity(limit: int = 100, db: Session = Depends(get_db)):
+def list_activity(limit: int = 100, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     return (
         db.query(models.Activity)
+        .filter(models.Activity.user_id == current_user.id)
         .order_by(models.Activity.created_at.desc())
         .limit(limit)
         .all()
@@ -641,8 +587,8 @@ def list_activity(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @app.post("/api/activity", response_model=schemas.ActivityOut, status_code=201)
-def create_activity(a: schemas.ActivityBase, db: Session = Depends(get_db)):
-    act = models.Activity(**a.model_dump())
+def create_activity(a: schemas.ActivityBase, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    act = models.Activity(user_id=current_user.id, **a.model_dump())
     if act.date is None:
         act.date = date.today()
     db.add(act)
@@ -652,44 +598,51 @@ def create_activity(a: schemas.ActivityBase, db: Session = Depends(get_db)):
 
 
 @app.get("/api/discovery/coverage", response_model=schemas.DiscoveryCoverageOut)
-def discovery_coverage(db: Session = Depends(get_db)):
+def discovery_coverage(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     active_run = (
         db.query(models.DiscoveryRun)
-        .filter(models.DiscoveryRun.status.in_(["queued", "running"]))
+        .filter(models.DiscoveryRun.user_id == current_user.id, models.DiscoveryRun.status.in_(["queued", "running"]))
         .order_by(models.DiscoveryRun.created_at.desc())
         .first()
     )
     latest_run = (
         db.query(models.DiscoveryRun)
+        .filter(models.DiscoveryRun.user_id == current_user.id)
         .order_by(models.DiscoveryRun.created_at.desc())
         .first()
     )
+    own_run_ids = db.query(models.DiscoveryRun.id).filter(models.DiscoveryRun.user_id == current_user.id)
     recent_logs = (
         db.query(models.DiscoveryLog)
+        .filter(models.DiscoveryLog.run_id.in_(own_run_ids))
         .order_by(models.DiscoveryLog.created_at.desc())
         .limit(12)
         .all()
     )
+    own_university_ids = db.query(models.DiscoveryUniversity.id).filter(models.DiscoveryUniversity.run_id.in_(own_run_ids))
+    own_department_ids = db.query(models.DiscoveryDepartment.id).filter(models.DiscoveryDepartment.run_id.in_(own_run_ids))
+    own_page_ids = db.query(models.DiscoveryPage.id).filter(models.DiscoveryPage.run_id.in_(own_run_ids))
+    own_candidate_ids = db.query(models.DiscoveryCandidate.id).filter(models.DiscoveryCandidate.run_id.in_(own_run_ids))
     totals = {
-        "runs": db.query(func.count(models.DiscoveryRun.id)).scalar() or 0,
-        "universities": db.query(func.count(models.DiscoveryUniversity.id)).scalar() or 0,
-        "departments": db.query(func.count(models.DiscoveryDepartment.id)).scalar() or 0,
-        "pages": db.query(func.count(models.DiscoveryPage.id)).scalar() or 0,
-        "candidates": db.query(func.count(models.DiscoveryCandidate.id)).scalar() or 0,
+        "runs": db.query(func.count(models.DiscoveryRun.id)).filter(models.DiscoveryRun.user_id == current_user.id).scalar() or 0,
+        "universities": db.query(func.count(models.DiscoveryUniversity.id)).filter(models.DiscoveryUniversity.run_id.in_(own_run_ids)).scalar() or 0,
+        "departments": db.query(func.count(models.DiscoveryDepartment.id)).filter(models.DiscoveryDepartment.run_id.in_(own_run_ids)).scalar() or 0,
+        "pages": db.query(func.count(models.DiscoveryPage.id)).filter(models.DiscoveryPage.run_id.in_(own_run_ids)).scalar() or 0,
+        "candidates": db.query(func.count(models.DiscoveryCandidate.id)).filter(models.DiscoveryCandidate.run_id.in_(own_run_ids)).scalar() or 0,
         "verified_candidates": (
             db.query(func.count(models.DiscoveryCandidate.id))
-            .filter(models.DiscoveryCandidate.verification_status == "verified")
+            .filter(models.DiscoveryCandidate.run_id.in_(own_run_ids), models.DiscoveryCandidate.verification_status == "verified")
             .scalar()
             or 0
         ),
         "rejected_candidates": (
             db.query(func.count(models.DiscoveryCandidate.id))
-            .filter(models.DiscoveryCandidate.verification_status == "rejected")
+            .filter(models.DiscoveryCandidate.run_id.in_(own_run_ids), models.DiscoveryCandidate.verification_status == "rejected")
             .scalar()
             or 0
         ),
-        "evidence_items": db.query(func.count(models.DiscoveryEvidence.id)).scalar() or 0,
-        "logs": db.query(func.count(models.DiscoveryLog.id)).scalar() or 0,
+        "evidence_items": db.query(func.count(models.DiscoveryEvidence.id)).filter(models.DiscoveryEvidence.candidate_id.in_(own_candidate_ids)).scalar() or 0,
+        "logs": db.query(func.count(models.DiscoveryLog.id)).filter(models.DiscoveryLog.run_id.in_(own_run_ids)).scalar() or 0,
     }
     return {
         "active_run": active_run,
@@ -714,6 +667,7 @@ def discovery_coverage(db: Session = Depends(get_db)):
 def create_discovery_run(
     payload: schemas.DiscoveryRunCreate,
     background_tasks: BackgroundTasks,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     countries = parse_country_targets(payload.target_countries)
@@ -729,6 +683,7 @@ def create_discovery_run(
         ]
 
     run = models.DiscoveryRun(
+        user_id=current_user.id,
         status="queued",
         phase="universities",
         position_type=payload.position_type,
@@ -749,22 +704,28 @@ def create_discovery_run(
     ))
     db.commit()
     db.refresh(run)
-    background_tasks.add_task(run_discovery_seed_pipeline, run.id)
+    background_tasks.add_task(run_discovery_pipeline, run.id)
     return run
 
 
 @app.get("/api/discovery/runs/{run_id}", response_model=schemas.DiscoveryRunOut)
-def get_discovery_run(run_id: int, db: Session = Depends(get_db)):
+def get_discovery_run(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     run = db.get(models.DiscoveryRun, run_id)
-    if not run:
+    if not run or run.user_id != current_user.id:
+        raise HTTPException(404, "discovery run not found")
+    return run
+
+
+def _owned_discovery_run(run_id: int, current_user: models.User, db: Session) -> models.DiscoveryRun:
+    run = db.get(models.DiscoveryRun, run_id)
+    if not run or run.user_id != current_user.id:
         raise HTTPException(404, "discovery run not found")
     return run
 
 
 @app.get("/api/discovery/runs/{run_id}/universities", response_model=List[schemas.DiscoveryUniversityOut])
-def list_discovery_run_universities(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
+def list_discovery_run_universities(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _owned_discovery_run(run_id, current_user, db)
     return (
         db.query(models.DiscoveryUniversity)
         .filter(models.DiscoveryUniversity.run_id == run_id)
@@ -773,41 +734,9 @@ def list_discovery_run_universities(run_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/api/discovery/runs/{run_id}/seed-pages", response_model=schemas.DiscoveryRunOut)
-def seed_discovery_run_pages(
-    run_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    run = db.get(models.DiscoveryRun, run_id)
-    if not run:
-        raise HTTPException(404, "discovery run not found")
-    if run.status in {"queued", "running"}:
-        raise HTTPException(409, "discovery run is already active")
-    if run.universities_total <= 0:
-        raise HTTPException(400, "run has no universities to seed")
-    run.status = "queued"
-    run.phase = "departments"
-    run.summary = "Department and page seeding is queued."
-    run.error_message = None
-    run.completed_at = None
-    run.updated_at = datetime.utcnow()
-    db.add(models.DiscoveryLog(
-        run_id=run.id,
-        level="info",
-        stage="departments",
-        message="Queued department and page seeding.",
-    ))
-    db.commit()
-    db.refresh(run)
-    background_tasks.add_task(seed_department_pages_for_run, run.id)
-    return run
-
-
 @app.get("/api/discovery/runs/{run_id}/departments", response_model=List[schemas.DiscoveryDepartmentOut])
-def list_discovery_run_departments(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
+def list_discovery_run_departments(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _owned_discovery_run(run_id, current_user, db)
     return (
         db.query(models.DiscoveryDepartment)
         .filter(models.DiscoveryDepartment.run_id == run_id)
@@ -817,9 +746,8 @@ def list_discovery_run_departments(run_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/discovery/runs/{run_id}/pages", response_model=List[schemas.DiscoveryPageOut])
-def list_discovery_run_pages(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
+def list_discovery_run_pages(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _owned_discovery_run(run_id, current_user, db)
     return (
         db.query(models.DiscoveryPage)
         .filter(models.DiscoveryPage.run_id == run_id)
@@ -829,41 +757,16 @@ def list_discovery_run_pages(run_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/api/discovery/runs/{run_id}/extract-candidates", response_model=schemas.DiscoveryRunOut)
-def extract_discovery_run_candidates(
-    run_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    run = db.get(models.DiscoveryRun, run_id)
-    if not run:
-        raise HTTPException(404, "discovery run not found")
-    if run.status in {"queued", "running"}:
-        raise HTTPException(409, "discovery run is already active")
-    if run.directory_pages_found <= 0:
-        raise HTTPException(400, "run has no seeded pages to crawl")
-    run.status = "queued"
-    run.phase = "candidates"
-    run.summary = "Candidate extraction is queued."
-    run.error_message = None
-    run.completed_at = None
-    run.updated_at = datetime.utcnow()
-    db.add(models.DiscoveryLog(
-        run_id=run.id,
-        level="info",
-        stage="candidates",
-        message="Queued candidate extraction.",
-    ))
-    db.commit()
-    db.refresh(run)
-    background_tasks.add_task(extract_candidates_for_run, run.id)
-    return run
+def _owned_discovery_candidate(candidate_id: int, current_user: models.User, db: Session) -> models.DiscoveryCandidate:
+    candidate = db.get(models.DiscoveryCandidate, candidate_id)
+    if not candidate or not candidate.run or candidate.run.user_id != current_user.id:
+        raise HTTPException(404, "discovery candidate not found")
+    return candidate
 
 
 @app.get("/api/discovery/runs/{run_id}/candidates", response_model=List[schemas.DiscoveryCandidateOut])
-def list_discovery_run_candidates(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
+def list_discovery_run_candidates(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _owned_discovery_run(run_id, current_user, db)
     return (
         db.query(models.DiscoveryCandidate)
         .filter(models.DiscoveryCandidate.run_id == run_id)
@@ -877,31 +780,21 @@ def list_discovery_run_candidates(run_id: int, db: Session = Depends(get_db)):
     )
 
 
-@app.post("/api/discovery/runs/{run_id}/verify-candidates")
-def verify_discovery_run_candidates(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
-    return verify_and_score_candidates_for_run(run_id)
-
-
 @app.post("/api/discovery/candidates/{candidate_id}/promote", response_model=schemas.ProfessorOut)
-def promote_discovery_candidate(candidate_id: int, db: Session = Depends(get_db)):
-    candidate = db.get(models.DiscoveryCandidate, candidate_id)
-    if not candidate:
-        raise HTTPException(404, "discovery candidate not found")
+def promote_discovery_candidate(candidate_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    candidate = _owned_discovery_candidate(candidate_id, current_user, db)
     if candidate.verification_status == "rejected":
         raise HTTPException(400, "rejected candidates cannot be promoted")
-    prof = promote_candidate_to_professor(db, candidate_id)
+    prof = promote_candidate_to_professor(db, candidate_id, current_user.id)
     if not prof:
         raise HTTPException(404, "discovery candidate not found")
-    _log(db, f"Promoted discovery candidate: {prof.name}", professor_id=prof.id)
+    _log(db, current_user.id, f"Promoted discovery candidate: {prof.name}", professor_id=prof.id)
     return prof
 
 
 @app.post("/api/discovery/runs/{run_id}/promote-verified", response_model=List[schemas.ProfessorOut])
-def promote_verified_discovery_candidates(run_id: int, db: Session = Depends(get_db)):
-    if not db.get(models.DiscoveryRun, run_id):
-        raise HTTPException(404, "discovery run not found")
+def promote_verified_discovery_candidates(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _owned_discovery_run(run_id, current_user, db)
     candidates = (
         db.query(models.DiscoveryCandidate)
         .filter(models.DiscoveryCandidate.run_id == run_id)
@@ -913,17 +806,15 @@ def promote_verified_discovery_candidates(run_id: int, db: Session = Depends(get
     )
     promoted: list[models.Professor] = []
     for candidate in candidates:
-        prof = promote_candidate_to_professor(db, candidate.id)
+        prof = promote_candidate_to_professor(db, candidate.id, current_user.id)
         if prof:
             promoted.append(prof)
     return promoted
 
 
 @app.post("/api/discovery/candidates/{candidate_id}/reject", response_model=schemas.DiscoveryCandidateOut)
-def reject_discovery_candidate(candidate_id: int, db: Session = Depends(get_db)):
-    candidate = db.get(models.DiscoveryCandidate, candidate_id)
-    if not candidate:
-        raise HTTPException(404, "discovery candidate not found")
+def reject_discovery_candidate(candidate_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    candidate = _owned_discovery_candidate(candidate_id, current_user, db)
     candidate.verification_status = "rejected"
     candidate.rejection_reason = "Rejected during manual review."
     candidate.updated_at = datetime.utcnow()
@@ -933,8 +824,8 @@ def reject_discovery_candidate(candidate_id: int, db: Session = Depends(get_db))
 
 
 @app.get("/api/stats", response_model=schemas.Stats)
-def stats(db: Session = Depends(get_db)):
-    profs = db.query(models.Professor).all()
+def stats(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    profs = db.query(models.Professor).filter(models.Professor.user_id == current_user.id).all()
     total = len(profs)
 
     by_status, by_tier, by_university = {}, {}, {}
@@ -982,6 +873,7 @@ def get_batches(
     tiers: Optional[str] = None,              # CSV of T1,T2,T3
     categories: Optional[str] = None,         # CSV of renewable,av,...
     universities: Optional[str] = None,       # CSV of names (URL-encoded)
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Bin-pack drafts into batches that are safe to send the same day.
@@ -1010,7 +902,11 @@ def get_batches(
     drafts = (
         db.query(models.EmailDraft)
         .join(models.Professor)
-        .filter(models.Professor.status == "drafting", models.EmailDraft.is_backup == False)
+        .filter(
+            models.EmailDraft.user_id == current_user.id,
+            models.Professor.status == "drafting",
+            models.EmailDraft.is_backup == False,
+        )
         .all()
     )
 
@@ -1160,21 +1056,21 @@ def get_batches(
 # Per-draft skip toggle (excludes from batch packing)
 # ────────────────────────────────────────────────────────
 @app.post("/api/drafts/{did}/skip")
-def skip_draft(did: int, db: Session = Depends(get_db)):
+def skip_draft(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "Draft not found.")
     d.skipped_at = datetime.utcnow()
     db.commit()
-    _log(db, f"Skipped draft for {d.professor.name if d.professor else did}",
+    _log(db, current_user.id, f"Skipped draft for {d.professor.name if d.professor else did}",
          professor_id=d.professor_id)
     return {"ok": True, "draft_id": did, "skipped_at": d.skipped_at.isoformat()}
 
 
 @app.post("/api/drafts/{did}/unskip")
-def unskip_draft(did: int, db: Session = Depends(get_db)):
+def unskip_draft(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.EmailDraft, did)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "Draft not found.")
     d.skipped_at = None
     db.commit()
@@ -1191,7 +1087,7 @@ class MarkSentBody(BaseModel):
 
 
 @app.post("/api/batches/mark-sent")
-def mark_batch_sent(payload: MarkSentBody, db: Session = Depends(get_db)):
+def mark_batch_sent(payload: MarkSentBody, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         sd = date.fromisoformat(payload.send_date) if payload.send_date else date.today()
     except ValueError:
@@ -1199,7 +1095,7 @@ def mark_batch_sent(payload: MarkSentBody, db: Session = Depends(get_db)):
     flipped = 0
     for did in payload.draft_ids:
         d = db.get(models.EmailDraft, did)
-        if not d or not d.professor:
+        if not d or d.user_id != current_user.id or not d.professor:
             continue
         d.sent_via = "manual"
         d.sent_at = datetime.combine(sd, datetime.min.time())
@@ -1208,7 +1104,7 @@ def mark_batch_sent(payload: MarkSentBody, db: Session = Depends(get_db)):
         p.status = "sent"
         p.date_sent = sd
         flipped += 1
-        _log(db, f"Marked sent: {p.name}", professor_id=p.id)
+        _log(db, current_user.id, f"Marked sent: {p.name}", professor_id=p.id)
     db.commit()
     return {"ok": True, "marked_sent": flipped, "send_date": sd.isoformat()}
 
@@ -1216,10 +1112,10 @@ def mark_batch_sent(payload: MarkSentBody, db: Session = Depends(get_db)):
 # ────────────────────────────────────────────────────────
 # Settings (read/patch)
 # ────────────────────────────────────────────────────────
-def _settings_row(db: Session) -> models.Settings:
-    s = db.query(models.Settings).first()
+def _settings_row(db: Session, current_user: models.User) -> models.Settings:
+    s = db.query(models.Settings).filter_by(user_id=current_user.id).first()
     if not s:
-        s = models.Settings()
+        s = models.Settings(user_id=current_user.id)
         db.add(s)
         db.commit()
         db.refresh(s)
@@ -1227,8 +1123,8 @@ def _settings_row(db: Session) -> models.Settings:
 
 
 @app.get("/api/settings")
-def get_settings(db: Session = Depends(get_db)):
-    s = _settings_row(db)
+def get_settings(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    s = _settings_row(db, current_user)
     return {
         "ai_provider": s.ai_provider,
         "claude_cli_path": s.claude_cli_path,
@@ -1237,6 +1133,7 @@ def get_settings(db: Session = Depends(get_db)):
         "openai_api_key_set": bool(s.openai_api_key),
         "openrouter_api_key_set": bool(s.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")),
         "openrouter_model": s.openrouter_model or os.environ.get("OPENROUTER_MODEL") or "z-ai/glm-5.2",
+        "websearch_api_key_set": bool(s.websearch_api_key or os.environ.get("WEBSEARCH_API_KEY") or os.environ.get("TAVILY_API_KEY")),
         "default_provider_per_workflow": s.default_provider_per_workflow or {},
         "email_tone_rules": s.email_tone_rules or "",
         "daily_cost_cap_usd": s.daily_cost_cap_usd,
@@ -1260,13 +1157,14 @@ def get_settings(db: Session = Depends(get_db)):
 
 
 @app.patch("/api/settings")
-def patch_settings(payload: dict, db: Session = Depends(get_db)):
+def patch_settings(payload: dict, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     from .gmail import encrypt_password
 
-    s = _settings_row(db)
+    s = _settings_row(db, current_user)
     for k in (
         "ai_provider", "claude_cli_path", "codex_cli_path",
         "anthropic_api_key", "openai_api_key", "openrouter_api_key", "openrouter_model", "email_tone_rules",
+        "websearch_api_key",
         "daily_cost_cap_usd", "ui_density", "default_provider_per_workflow",
         "batch_defaults",
         "gmail_address", "gmail_send_name",
@@ -1291,14 +1189,14 @@ def patch_settings(payload: dict, db: Session = Depends(get_db)):
             s.gmail_app_password_encrypted = encrypt_password(plain)
 
     db.commit()
-    return get_settings(db)
+    return get_settings(current_user, db)
 
 
 @app.post("/api/gmail/test")
-def test_gmail(db: Session = Depends(get_db)):
+def test_gmail(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Try a SMTP login with the currently stored credentials."""
     from .gmail import decrypt_password, verify_credentials
-    s = _settings_row(db)
+    s = _settings_row(db, current_user)
     if not s.gmail_address or not s.gmail_app_password_encrypted:
         raise HTTPException(400, "Gmail is not configured. Save your address + app password first.")
     try:
@@ -1318,6 +1216,7 @@ async def upload_draft_attachment(
     did: int,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Upload a file and attach it to this specific draft.
@@ -1329,7 +1228,7 @@ async def upload_draft_attachment(
     """
     from .documents import upload_document
     draft = db.get(models.EmailDraft, did)
-    if not draft:
+    if not draft or draft.user_id != current_user.id:
         raise HTTPException(404, f"Draft {did} not found")
 
     # Save the upload via the existing documents pipeline as kind='other'
@@ -1340,14 +1239,14 @@ async def upload_draft_attachment(
         title=file.filename or "",
         is_default=False,
         file=file,
+        current_user=current_user,
         db=db,
     )
     new_doc_id = doc_dict["id"]
 
     # Seed the draft's attachments from the default CV if it was still null
-    user = db.get(models.User, 1)
     if draft.attachment_doc_ids is None:
-        seed = [user.cv_doc_id] if user and user.cv_doc_id else []
+        seed = [current_user.cv_doc_id] if current_user.cv_doc_id else []
         draft.attachment_doc_ids = seed
     # De-dup + append
     cur = list(draft.attachment_doc_ids or [])
@@ -1365,7 +1264,7 @@ async def upload_draft_attachment(
 
 
 @app.post("/api/drafts/bulk-attach")
-def bulk_attach(payload: dict, db: Session = Depends(get_db)):
+def bulk_attach(payload: dict, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Attach the given document IDs to every currently-active draft.
 
     Body: ``{"doc_ids": [int], "target": "drafting" | "all"}``
@@ -1385,20 +1284,26 @@ def bulk_attach(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(400, "doc_ids must be a non-empty list of integers.")
     doc_ids = [int(x) for x in doc_ids]
 
-    # Validate the docs exist
-    existing = {d.id for d in db.query(models.Document).filter(models.Document.id.in_(doc_ids)).all()}
+    # Validate the docs exist and belong to this user
+    existing = {
+        d.id
+        for d in db.query(models.Document)
+        .filter(models.Document.id.in_(doc_ids), models.Document.user_id == current_user.id)
+        .all()
+    }
     missing = [i for i in doc_ids if i not in existing]
     if missing:
         raise HTTPException(400, f"Unknown document IDs: {missing}")
 
     target = (payload.get("target") or "drafting").lower()
-    q = db.query(models.EmailDraft).filter(models.EmailDraft.is_backup == False)  # noqa: E712
+    q = db.query(models.EmailDraft).filter(
+        models.EmailDraft.user_id == current_user.id, models.EmailDraft.is_backup == False  # noqa: E712
+    )
     if target == "drafting":
         q = q.join(models.Professor).filter(models.Professor.status == "drafting")
     drafts = q.all()
 
-    user = db.get(models.User, 1)
-    default_cv_id = user.cv_doc_id if user else None
+    default_cv_id = current_user.cv_doc_id
     n_modified = 0
     for d in drafts:
         if d.attachment_doc_ids is None:
@@ -1417,11 +1322,14 @@ def bulk_attach(payload: dict, db: Session = Depends(get_db)):
 
 
 @app.post("/api/drafts/{did}/send")
-def send_draft_endpoint(did: int, db: Session = Depends(get_db)):
+def send_draft_endpoint(did: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Send a draft via Gmail SMTP. Marks the draft sent + advances professor status."""
     from .gmail import send_draft, SendError
+    draft = db.get(models.EmailDraft, did)
+    if not draft or draft.user_id != current_user.id:
+        raise HTTPException(404, "Draft not found.")
     try:
-        result = send_draft(db, did)
+        result = send_draft(db, current_user, did)
     except SendError as exc:
         raise HTTPException(400, str(exc))
     return result
@@ -1432,7 +1340,7 @@ def send_draft_endpoint(did: int, db: Session = Depends(get_db)):
 # ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/sent")
-def list_sent(db: Session = Depends(get_db)):
+def list_sent(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Return every sent draft with its professor, reply count, and last reply.
 
     Used by the Sent page to show: who's been emailed, how long ago, current
@@ -1442,6 +1350,7 @@ def list_sent(db: Session = Depends(get_db)):
         db.query(models.EmailDraft)
         .join(models.Professor, models.Professor.id == models.EmailDraft.professor_id)
         .filter(
+            models.EmailDraft.user_id == current_user.id,
             models.EmailDraft.sent_at.isnot(None),
             models.EmailDraft.is_backup == False,  # noqa: E712
         )
@@ -1507,15 +1416,16 @@ def list_sent(db: Session = Depends(get_db)):
 
 
 @app.post("/api/sent/check-replies")
-def check_replies_endpoint(db: Session = Depends(get_db)):
+def check_replies_endpoint(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Poll Gmail IMAP for new replies. Updates statuses + stores reply rows."""
     from .gmail_inbox import check_replies, InboxError
+    settings = _settings_row(db, current_user)
     try:
-        result = check_replies(db)
+        result = check_replies(db, settings)
     except InboxError as exc:
         raise HTTPException(400, str(exc))
     if result.get("new_replies"):
-        _log(db, f"Replies sync: {result['new_replies']} new across {result['checked']} sent drafts")
+        _log(db, current_user.id, f"Replies sync: {result['new_replies']} new across {result['checked']} sent drafts")
     return result
 
 
@@ -1544,15 +1454,15 @@ def _reply_out(r: models.EmailReply) -> dict:
     }
 
 
-async def _draft_reply_response(db: Session, reply: models.EmailReply, instruction: str) -> dict:
+async def _draft_reply_response(db: Session, current_user: models.User, reply: models.EmailReply, instruction: str) -> dict:
     """Run the draft_reply Quill workflow to completion and return {subject, body}."""
-    from .quill import _provider_env_for, _settings, _select_provider_for, _shim
+    from .quill import _provider_env_for, _select_provider_for, _shim
     from ai.runner import (
         Workflow, RunRequest, Provider, resolve_cli_path,
         stream as runner_stream, extract_json_payload,
     )
 
-    settings = _settings(db)
+    settings = _settings_row(db, current_user)
     provider = _select_provider_for(settings)
     if provider is None:
         raise HTTPException(503, "No AI provider available. Configure Claude/Codex CLI or an API key in Settings.")
@@ -1561,7 +1471,7 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
         resolve_cli_path("codex", settings.codex_cli_path) if provider == Provider.CODEX_CLI else None
     )
 
-    user = db.get(models.User, 1)
+    user = current_user
     draft = reply.draft
     prof = draft.professor if draft else None
     params = {
@@ -1594,16 +1504,16 @@ async def _draft_reply_response(db: Session, reply: models.EmailReply, instructi
 
 
 @app.post("/api/replies/{rid}/draft-response")
-async def draft_reply_response(rid: int, payload: ReplyDraftIn, db: Session = Depends(get_db)):
+async def draft_reply_response(rid: int, payload: ReplyDraftIn, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Ask Quill to draft a response to an inbound reply, given the user's instruction."""
     reply = db.get(models.EmailReply, rid)
-    if not reply:
+    if not reply or reply.user_id != current_user.id:
         raise HTTPException(404, "Reply not found.")
     instruction = (payload.instruction or "").strip()
     if not instruction:
         raise HTTPException(400, "Tell Quill what the reply should say.")
 
-    result = await _draft_reply_response(db, reply, instruction)
+    result = await _draft_reply_response(db, current_user, reply, instruction)
     reply.response_draft = (result.get("body") or "").strip()
     reply.response_subject = (result.get("subject") or reply.response_subject or "").strip() or None
     if reply.read_at is None:
@@ -1618,10 +1528,10 @@ async def draft_reply_response(rid: int, payload: ReplyDraftIn, db: Session = De
 
 
 @app.patch("/api/replies/{rid}")
-def patch_reply(rid: int, patch: ReplyPatchIn, db: Session = Depends(get_db)):
+def patch_reply(rid: int, patch: ReplyPatchIn, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Mark a reply read/dismissed or save an edited response draft."""
     reply = db.get(models.EmailReply, rid)
-    if not reply:
+    if not reply or reply.user_id != current_user.id:
         raise HTTPException(404, "Reply not found.")
     now = datetime.utcnow()
     if patch.read is not None:
@@ -1637,14 +1547,17 @@ def patch_reply(rid: int, patch: ReplyPatchIn, db: Session = Depends(get_db)):
 
 
 @app.post("/api/replies/{rid}/send-response")
-def send_reply_response(rid: int, db: Session = Depends(get_db)):
+def send_reply_response(rid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Send the composed response back to the professor via Gmail, threaded."""
     from .gmail import send_reply, SendError
+    reply = db.get(models.EmailReply, rid)
+    if not reply or reply.user_id != current_user.id:
+        raise HTTPException(404, "Reply not found.")
     try:
-        result = send_reply(db, rid)
+        result = send_reply(db, current_user, rid)
     except SendError as exc:
         raise HTTPException(400, str(exc))
-    _log(db, f"Reply sent to {result['to']}: {result['subject']}")
+    _log(db, current_user.id, f"Reply sent to {result['to']}: {result['subject']}")
     return result
 
 
@@ -1780,13 +1693,13 @@ def _prof_prompt_dict(prof: models.Professor) -> dict:
     }
 
 
-async def _run_workflow_json(db: Session, workflow, params: dict,
+async def _run_workflow_json(db: Session, current_user: models.User, workflow, params: dict,
                              max_turns: int = 6, timeout_s: int = 240) -> dict:
     """Run a Quill workflow to completion and return the parsed JSON payload."""
-    from .quill import _provider_env_for, _settings, _select_provider_for
+    from .quill import _provider_env_for, _select_provider_for
     from ai.runner import RunRequest, Provider, resolve_cli_path, stream as runner_stream, extract_json_payload
 
-    settings = _settings(db)
+    settings = _settings_row(db, current_user)
     provider = _select_provider_for(settings)
     if provider is None:
         raise HTTPException(503, "No AI provider available. Configure Claude/Codex CLI or an API key in Settings.")
@@ -1827,9 +1740,10 @@ def _build_thread(reply: Optional[models.EmailReply]) -> str:
 
 
 @app.get("/api/interview-prep")
-def list_interview_preps(db: Session = Depends(get_db)):
+def list_interview_preps(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     preps = (
         db.query(models.InterviewPrep)
+        .filter(models.InterviewPrep.user_id == current_user.id)
         .order_by(models.InterviewPrep.updated_at.desc())
         .all()
     )
@@ -1837,10 +1751,10 @@ def list_interview_preps(db: Session = Depends(get_db)):
 
 
 @app.get("/api/professors/{pid}/interview-prep")
-def get_interview_prep(pid: int, db: Session = Depends(get_db)):
+def get_interview_prep(pid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prep = (
         db.query(models.InterviewPrep)
-        .filter_by(professor_id=pid)
+        .filter_by(professor_id=pid, user_id=current_user.id)
         .order_by(models.InterviewPrep.updated_at.desc())
         .first()
     )
@@ -1851,26 +1765,29 @@ def get_interview_prep(pid: int, db: Session = Depends(get_db)):
 
 @app.post("/api/professors/{pid}/interview-prep")
 async def generate_interview_prep(pid: int, payload: InterviewPrepGenerateIn,
+                                  current_user: models.User = Depends(get_current_user),
                                   db: Session = Depends(get_db)):
     from ai.runner import Workflow
 
     prof = db.get(models.Professor, pid)
-    if not prof:
+    if not prof or prof.user_id != current_user.id:
         raise HTTPException(404, "Professor not found.")
-    user = db.query(models.User).first()
+    user = current_user
 
     reply = None
     if payload.reply_id:
         reply = db.get(models.EmailReply, payload.reply_id)
+        if reply and reply.user_id != current_user.id:
+            reply = None
     if reply is None:
         reply = (
             db.query(models.EmailReply)
-            .filter_by(professor_id=pid)
+            .filter_by(professor_id=pid, user_id=current_user.id)
             .order_by(models.EmailReply.received_at.desc())
             .first()
         )
 
-    prep = db.query(models.InterviewPrep).filter_by(professor_id=pid).first()
+    prep = db.query(models.InterviewPrep).filter_by(professor_id=pid, user_id=current_user.id).first()
     meeting_format = payload.meeting_format or (prep.meeting_format if prep else None)
     position_type = prof.position_type or (user.target_position_type if user else None)
 
@@ -1894,11 +1811,11 @@ async def generate_interview_prep(pid: int, payload: InterviewPrepGenerateIn,
         "position_type": position_type,
         "meeting_format": meeting_format,
     }
-    result = await _run_workflow_json(db, Workflow.PREPARE_INTERVIEW, params,
+    result = await _run_workflow_json(db, current_user, Workflow.PREPARE_INTERVIEW, params,
                                       max_turns=6, timeout_s=300)
 
     if prep is None:
-        prep = models.InterviewPrep(professor_id=pid)
+        prep = models.InterviewPrep(professor_id=pid, user_id=current_user.id)
         db.add(prep)
     prep.reply_id = reply.id if reply else None
     prep.position_type = position_type
@@ -1917,16 +1834,17 @@ async def generate_interview_prep(pid: int, payload: InterviewPrepGenerateIn,
         prof.status = "interview"
     db.commit()
     db.refresh(prep)
-    _log(db, "interview_prep_generated", professor_id=pid,
+    _log(db, current_user.id, "interview_prep_generated", professor_id=pid,
          detail=f"Interview prep generated for {prof.name}")
     return _prep_out(prep)
 
 
 @app.patch("/api/interview-prep/{prep_id}")
 def patch_interview_prep(prep_id: int, patch: InterviewPrepPatchIn,
+                         current_user: models.User = Depends(get_current_user),
                          db: Session = Depends(get_db)):
     prep = db.get(models.InterviewPrep, prep_id)
-    if not prep:
+    if not prep or prep.user_id != current_user.id:
         raise HTTPException(404, "Interview prep not found.")
     data = patch.model_dump(exclude_unset=True)
     if "meeting_at" in data:
@@ -1942,19 +1860,19 @@ def patch_interview_prep(prep_id: int, patch: InterviewPrepPatchIn,
 
 
 @app.delete("/api/interview-prep/{prep_id}", status_code=204)
-def delete_interview_prep(prep_id: int, db: Session = Depends(get_db)):
+def delete_interview_prep(prep_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     prep = db.get(models.InterviewPrep, prep_id)
-    if not prep:
+    if not prep or prep.user_id != current_user.id:
         raise HTTPException(404, "Interview prep not found.")
     db.query(models.MockInterview).filter_by(prep_id=prep_id).delete()
     db.delete(prep)
     db.commit()
 
 
-def _mock_params(db: Session, prep: models.InterviewPrep, transcript: list,
+def _mock_params(db: Session, current_user: models.User, prep: models.InterviewPrep, transcript: list,
                  applicant_answer: str = "", finish: bool = False) -> dict:
     prof = prep.professor
-    user = db.query(models.User).first()
+    user = current_user
     briefing = _prep_struct(prep.briefing, _EMPTY_BRIEFING, "summary")
     return {
         "user": _user_prompt_dict(user),
@@ -1969,15 +1887,15 @@ def _mock_params(db: Session, prep: models.InterviewPrep, transcript: list,
 
 
 @app.post("/api/interview-prep/{prep_id}/mock/start")
-async def start_mock_interview(prep_id: int, db: Session = Depends(get_db)):
+async def start_mock_interview(prep_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     from ai.runner import Workflow
 
     prep = db.get(models.InterviewPrep, prep_id)
-    if not prep:
+    if not prep or prep.user_id != current_user.id:
         raise HTTPException(404, "Interview prep not found.")
     result = await _run_workflow_json(
-        db, Workflow.MOCK_INTERVIEW,
-        _mock_params(db, prep, transcript=[]),
+        db, current_user, Workflow.MOCK_INTERVIEW,
+        _mock_params(db, current_user, prep, transcript=[]),
         max_turns=4, timeout_s=180,
     )
     opener = (result.get("professor_message") or "").strip()
@@ -1985,6 +1903,7 @@ async def start_mock_interview(prep_id: int, db: Session = Depends(get_db)):
         raise HTTPException(502, "Quill could not start the mock interview.")
     now = datetime.utcnow().isoformat()
     mock = models.MockInterview(
+        user_id=current_user.id,
         prep_id=prep_id,
         transcript=[{"role": "professor", "text": opener, "at": now}],
         status="active",
@@ -1996,11 +1915,11 @@ async def start_mock_interview(prep_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/mock/{mid}/turn")
-async def mock_interview_turn(mid: int, payload: MockTurnIn, db: Session = Depends(get_db)):
+async def mock_interview_turn(mid: int, payload: MockTurnIn, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     from ai.runner import Workflow
 
     mock = db.get(models.MockInterview, mid)
-    if not mock:
+    if not mock or mock.user_id != current_user.id:
         raise HTTPException(404, "Mock interview not found.")
     if mock.status != "active":
         raise HTTPException(400, "This mock interview is already finished.")
@@ -2014,8 +1933,8 @@ async def mock_interview_turn(mid: int, payload: MockTurnIn, db: Session = Depen
     transcript.append({"role": "applicant", "text": answer, "at": now})
 
     result = await _run_workflow_json(
-        db, Workflow.MOCK_INTERVIEW,
-        _mock_params(db, prep, transcript=transcript, applicant_answer=answer),
+        db, current_user, Workflow.MOCK_INTERVIEW,
+        _mock_params(db, current_user, prep, transcript=transcript, applicant_answer=answer),
         max_turns=4, timeout_s=180,
     )
     feedback = (result.get("feedback_on_last_answer") or "").strip()
@@ -2034,16 +1953,16 @@ async def mock_interview_turn(mid: int, payload: MockTurnIn, db: Session = Depen
 
 
 @app.post("/api/mock/{mid}/finish")
-async def finish_mock_interview(mid: int, db: Session = Depends(get_db)):
+async def finish_mock_interview(mid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     from ai.runner import Workflow
 
     mock = db.get(models.MockInterview, mid)
-    if not mock:
+    if not mock or mock.user_id != current_user.id:
         raise HTTPException(404, "Mock interview not found.")
     prep = db.get(models.InterviewPrep, mock.prep_id)
     result = await _run_workflow_json(
-        db, Workflow.MOCK_INTERVIEW,
-        _mock_params(db, prep, transcript=list(mock.transcript or []), finish=True),
+        db, current_user, Workflow.MOCK_INTERVIEW,
+        _mock_params(db, current_user, prep, transcript=list(mock.transcript or []), finish=True),
         max_turns=4, timeout_s=180,
     )
     mock.summary = (result.get("summary") or "").strip() or None
@@ -2114,26 +2033,30 @@ def tts_voices():
 
 
 @app.get("/api/export")
-def export_all(db: Session = Depends(get_db)):
+def export_all(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     return {
         "professors": [
             schemas.ProfessorOut.model_validate(p).model_dump(mode="json")
-            for p in db.query(models.Professor).all()
+            for p in db.query(models.Professor).filter(models.Professor.user_id == current_user.id).all()
         ],
         "grants": [
             schemas.GrantOut.model_validate(g).model_dump(mode="json")
-            for g in db.query(models.Grant).all()
+            for g in db.query(models.Grant).filter(models.Grant.user_id == current_user.id).all()
         ],
         "activity": [
             schemas.ActivityOut.model_validate(a).model_dump(mode="json")
-            for a in db.query(models.Activity).all()
+            for a in db.query(models.Activity).filter(models.Activity.user_id == current_user.id).all()
         ],
     }
 
 
 @app.get("/api/profile")
-def get_profile(db: Session = Depends(get_db)):
-    u = get_user_singleton(db)
+def get_profile(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from .quill import _lifetime_ai_spend, DEFAULT_CREDIT_CAP_USD
+
+    u = current_user
+    cap = DEFAULT_CREDIT_CAP_USD if u.credit_cap_usd is None else u.credit_cap_usd
+    used = _lifetime_ai_spend(db, u.id)
     return {
         "id": u.id,
         "name": u.name,
@@ -2150,12 +2073,18 @@ def get_profile(db: Session = Depends(get_db)):
         "twitter": u.twitter,
         "phd_year": u.phd_year,
         "phd_institution": u.phd_institution,
+        "is_admin": u.is_admin,
+        "credit_cap_usd": None if u.is_admin else cap,
+        "credit_used_usd": None if u.is_admin else round(used, 4),
+        "credit_remaining_usd": None if u.is_admin else round(max(0.0, cap - used), 4),
     }
 
 
 @app.patch("/api/profile")
-def patch_profile(payload: dict, db: Session = Depends(get_db)):
-    u = get_user_singleton(db)
+def patch_profile(payload: dict, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    u = current_user
+    # Deliberately excludes is_admin / credit_cap_usd / account_email / password_hash —
+    # a user must never be able to grant themselves admin or raise their own cap.
     allowed = {
         "name", "email", "current_role", "affiliation", "country",
         "research_interests", "research_categories", "orcid",
@@ -2166,7 +2095,7 @@ def patch_profile(payload: dict, db: Session = Depends(get_db)):
             setattr(u, k, v)
     db.commit()
     db.refresh(u)
-    return get_profile(db)
+    return get_profile(current_user, db)
 
 
 # ────────────────────────────────────────────────────────
@@ -2213,9 +2142,10 @@ def _event_out(e: models.CalendarEvent) -> dict:
 def list_calendar_events(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    q = db.query(models.CalendarEvent)
+    q = db.query(models.CalendarEvent).filter(models.CalendarEvent.user_id == current_user.id)
     if from_date:
         try:
             q = q.filter(models.CalendarEvent.date >= date.fromisoformat(from_date))
@@ -2230,12 +2160,13 @@ def list_calendar_events(
 
 
 @app.post("/api/calendar/events", status_code=201)
-def create_calendar_event(payload: CalendarEventIn, db: Session = Depends(get_db)):
+def create_calendar_event(payload: CalendarEventIn, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         event_date = date.fromisoformat(payload.date)
     except ValueError:
         raise HTTPException(400, "Invalid date format, use YYYY-MM-DD")
     e = models.CalendarEvent(
+        user_id=current_user.id,
         title=payload.title,
         date=event_date,
         time=payload.time,
@@ -2248,14 +2179,14 @@ def create_calendar_event(payload: CalendarEventIn, db: Session = Depends(get_db
     db.add(e)
     db.commit()
     db.refresh(e)
-    _log(db, f"Added calendar event: {e.title}")
+    _log(db, current_user.id, f"Added calendar event: {e.title}")
     return _event_out(e)
 
 
 @app.patch("/api/calendar/events/{eid}")
-def update_calendar_event(eid: int, patch: CalendarEventPatch, db: Session = Depends(get_db)):
+def update_calendar_event(eid: int, patch: CalendarEventPatch, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     e = db.get(models.CalendarEvent, eid)
-    if not e:
+    if not e or e.user_id != current_user.id:
         raise HTTPException(404, "not found")
     data = patch.model_dump(exclude_unset=True)
     if "date" in data:
@@ -2272,17 +2203,17 @@ def update_calendar_event(eid: int, patch: CalendarEventPatch, db: Session = Dep
 
 
 @app.delete("/api/calendar/events/{eid}", status_code=204)
-def delete_calendar_event(eid: int, db: Session = Depends(get_db)):
+def delete_calendar_event(eid: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     e = db.get(models.CalendarEvent, eid)
-    if not e:
+    if not e or e.user_id != current_user.id:
         raise HTTPException(404, "not found")
     db.delete(e)
     db.commit()
 
 
-def _log(db: Session, action: str, professor_id: Optional[int] = None, detail: str = ""):
+def _log(db: Session, user_id: int, action: str, professor_id: Optional[int] = None, detail: str = ""):
     act = models.Activity(
-        date=date.today(), action=action, detail=detail, professor_id=professor_id
+        user_id=user_id, date=date.today(), action=action, detail=detail, professor_id=professor_id
     )
     db.add(act)
     db.commit()

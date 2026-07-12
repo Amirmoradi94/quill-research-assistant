@@ -35,6 +35,10 @@ export function Layout() {
   const user = {
     name: profile?.name || 'User',
     email: profile?.email || null,
+    isAdmin: profile?.is_admin ?? false,
+    creditCapUsd: profile?.credit_cap_usd ?? null,
+    creditUsedUsd: profile?.credit_used_usd ?? null,
+    creditRemainingUsd: profile?.credit_remaining_usd ?? null,
   }
 
   function startRailResize(e: ReactPointerEvent<HTMLDivElement>) {

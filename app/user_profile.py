@@ -1,8 +1,9 @@
 """User-profile API.
 
-Single-user model: there is always exactly one row in `users` (id=1) seeded
-on first boot. All endpoints operate on that singleton; the repeatables
-(education / publications / experience / awards / references) hang off it.
+Each authenticated account has exactly one `users` row (their own profile);
+all endpoints operate on the requester's row, resolved via `get_current_user`.
+The repeatables (education / publications / experience / awards / references)
+hang off it.
 """
 from __future__ import annotations
 
@@ -12,10 +13,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import models, schemas
+from .auth import get_current_user
 from .database import get_db
 
 
@@ -23,36 +24,16 @@ router = APIRouter(prefix="/api/user", tags=["user"])
 
 
 # ───────────────────────────────────────────────────────────────────
-# Singleton helper
-# ───────────────────────────────────────────────────────────────────
-def _user(db: Session) -> models.User:
-    u = db.get(models.User, 1)
-    if not u:
-        u = models.User(id=1, name="")
-        db.add(u)
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            u = db.get(models.User, 1)
-            if not u:
-                raise
-            return u
-        db.refresh(u)
-    return u
-
-
-# ───────────────────────────────────────────────────────────────────
 # Profile (scalars + nested repeatables)
 # ───────────────────────────────────────────────────────────────────
 @router.get("", response_model=schemas.UserProfileOut)
-def get_profile(db: Session = Depends(get_db)):
-    return _user(db)
+def get_profile(current_user: models.User = Depends(get_current_user)):
+    return current_user
 
 
 @router.patch("", response_model=schemas.UserProfileOut)
-def patch_profile(patch: schemas.UserProfileUpdate, db: Session = Depends(get_db)):
-    u = _user(db)
+def patch_profile(patch: schemas.UserProfileUpdate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    u = current_user
     data = patch.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(u, k, v)
@@ -67,8 +48,8 @@ def patch_profile(patch: schemas.UserProfileUpdate, db: Session = Depends(get_db
 # next extraction run leaves it alone.
 # ───────────────────────────────────────────────────────────────────
 @router.post("/field/{field_name}/verify")
-def verify_field(field_name: str, db: Session = Depends(get_db)):
-    u = _user(db)
+def verify_field(field_name: str, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    u = current_user
     prov = dict(u.field_provenance or {})
     entry = dict(prov.get(field_name) or {})
     entry["verified_by_user"] = True
@@ -95,15 +76,24 @@ _CHILD_REGISTRY: dict[str, tuple[type, type, type, type]] = {
 
 
 @router.delete("", response_model=schemas.UserProfileOut)
-def delete_profile_data(db: Session = Depends(get_db)):
-    """Clear the singleton user's profile data while keeping the account row."""
-    u = _user(db)
+def delete_profile_data(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Clear this account's profile data while keeping the account row."""
+    u = current_user
 
     for Model, *_ in _CHILD_REGISTRY.values():
         db.query(Model).filter(Model.user_id == u.id).delete(synchronize_session=False)
 
+    # Account / security / system columns are NOT "profile data" and must
+    # survive the wipe. Critically, is_admin and is_active are NOT NULL — nulling
+    # is_admin here raised a NOT NULL IntegrityError on commit, so the whole
+    # transaction rolled back and the delete silently did nothing (500). Keep
+    # credit_cap_usd too: it's an account-level spend cap, not a profile field.
+    _PRESERVE_COLUMNS = {
+        "id", "account_email", "password_hash", "is_active", "is_admin",
+        "credit_cap_usd", "created_at", "updated_at",
+    }
     for column in models.User.__table__.columns:
-        if column.name in {"id", "created_at", "updated_at"}:
+        if column.name in _PRESERVE_COLUMNS:
             continue
         setattr(u, column.name, "" if column.name == "name" else None)
 
@@ -117,16 +107,15 @@ def _register_child(kind: str, Model: type, InSchema: type, OutSchema: type) -> 
     """Register the 4 endpoints for one child kind. Inline closures with
     explicit (non-generic) type annotations so Pydantic can resolve them.
     """
-    def add_item(payload, db: Session = Depends(get_db)):
-        u = _user(db)
-        item = Model(user_id=u.id, **payload.model_dump(exclude_unset=True))
+    def add_item(payload, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+        item = Model(user_id=current_user.id, **payload.model_dump(exclude_unset=True))
         db.add(item); db.commit(); db.refresh(item)
         return item
     add_item.__annotations__["payload"] = InSchema
 
-    def patch_item(item_id: int, payload, db: Session = Depends(get_db)):
+    def patch_item(item_id: int, payload, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
         item = db.get(Model, item_id)
-        if not item or item.user_id != 1:
+        if not item or item.user_id != current_user.id:
             raise HTTPException(404, f"{kind} item {item_id} not found")
         for k, v in payload.model_dump(exclude_unset=True).items():
             setattr(item, k, v)
@@ -134,17 +123,17 @@ def _register_child(kind: str, Model: type, InSchema: type, OutSchema: type) -> 
         return item
     patch_item.__annotations__["payload"] = InSchema
 
-    def delete_item(item_id: int, db: Session = Depends(get_db)):
+    def delete_item(item_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
         item = db.get(Model, item_id)
-        if not item or item.user_id != 1:
+        if not item or item.user_id != current_user.id:
             raise HTTPException(404, f"{kind} item {item_id} not found")
         db.delete(item); db.commit()
         return None
 
-    def reorder_items(order: list[int], db: Session = Depends(get_db)):
+    def reorder_items(order: list[int], current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
         for idx, item_id in enumerate(order):
             item = db.get(Model, item_id)
-            if item and item.user_id == 1:
+            if item and item.user_id == current_user.id:
                 item.order_idx = idx
         db.commit()
         return {"ok": True, "count": len(order)}
@@ -167,11 +156,11 @@ for _kind, (_Model, _In, _UpdSchema, _Out) in _CHILD_REGISTRY.items():
 # so the frontend just hits /api/user/extract with no body.
 # ───────────────────────────────────────────────────────────────────
 @router.post("/extract")
-def extract_profile(request: Request, db: Session = Depends(get_db)):
+def extract_profile(request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Stream extraction events as SSE. Returns the run id in the first event."""
     from .quill import RunIn, run_workflow  # local import — circular at module level
 
-    u = _user(db)
+    u = current_user
     if not u.cv_doc_id:
         raise HTTPException(400, "Upload a CV first — set users.cv_doc_id before extracting.")
 
@@ -186,5 +175,6 @@ def extract_profile(request: Request, db: Session = Depends(get_db)):
             timeout_s=720,
         ),
         request,
+        current_user,
         db,
     )

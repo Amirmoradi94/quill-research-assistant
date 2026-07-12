@@ -9,6 +9,7 @@ type SettingsT = {
   codex_cli_path: string | null
   anthropic_api_key_set: boolean
   openai_api_key_set: boolean
+  websearch_api_key_set?: boolean
   email_tone_rules: string
   daily_cost_cap_usd: number
   ui_density: string

@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import platform
 import re
@@ -37,6 +38,9 @@ from sqlalchemy.orm import Session
 
 from .database import get_db
 from . import models
+from .auth import get_current_user
+
+log = logging.getLogger(__name__)
 
 # Make the parent dir importable so `ai` can be found alongside `app`.
 import sys
@@ -54,6 +58,7 @@ from ai.runner import (  # noqa: E402
     resolve_cli_path,
     select_provider,
     stream as runner_stream,
+    stream_openrouter_text,
 )
 from ai.cli import cli_child_env  # noqa: E402
 
@@ -134,15 +139,61 @@ class ProviderSetupIn(BaseModel):
 # ───────────────────────────────────────────────────────────────────
 # Helpers
 # ───────────────────────────────────────────────────────────────────
-def _settings(db: Session) -> models.Settings:
-    s = db.get(models.Settings, 1)
+def _settings(db: Session, current_user: models.User) -> models.Settings:
+    s = db.query(models.Settings).filter_by(user_id=current_user.id).first()
     if not s:
-        # Lazy create — should already exist via migration seed but be safe.
-        s = models.Settings()
+        # Lazy create — should already exist via signup but be safe.
+        s = models.Settings(user_id=current_user.id)
         db.add(s)
         db.commit()
         db.refresh(s)
     return s
+
+
+async def run_llm_once(
+    db: Session,
+    user: models.User,
+    prompt: str,
+    workflow: str = "discovery_llm",
+    timeout_s: int = 120,
+) -> str:
+    """Run a single OpenRouter text completion for `prompt` and return the text.
+
+    Used by discovery_v2 for the research-summary and shortlist-rerank steps.
+    Returns "" when OpenRouter isn't configured (caller degrades gracefully).
+    Records an estimated-cost AIRun row so spend counts against the credit cap.
+    """
+    settings = _settings(db, user)
+    env = _provider_env_for(settings, Provider.OPENROUTER_API)
+    if not (env and env.get("OPENROUTER_API_KEY")):
+        return ""
+    req = RunRequest(workflow=Workflow.CHAT, params={}, timeout_s=timeout_s)
+    parts: list[str] = []
+    try:
+        async for evt in stream_openrouter_text(prompt, req, env):
+            if evt.kind == "text":
+                parts.append(evt.data.get("text", ""))
+            elif evt.kind == "error":
+                log.warning("run_llm_once error: %s", evt.data)
+    except Exception as exc:  # noqa: BLE001 - LLM steps are optional enhancements
+        log.warning("run_llm_once failed: %s", exc)
+        return ""
+    text = "".join(parts)
+    # OpenRouter's text stream doesn't return a cost; estimate from length so
+    # the spend still registers against the lifetime cap. glm-class models are
+    # cheap (~$0.5/1M tok); tokens ~= chars / 4.
+    try:
+        est_tokens = (len(prompt) + len(text)) // 4
+        cost = round(est_tokens * (0.5 / 1_000_000), 8)
+        db.add(models.AIRun(
+            user_id=user.id, workflow=workflow, provider="openrouter_api",
+            status="done", tokens_in=len(prompt) // 4, tokens_out=len(text) // 4,
+            cost_usd=cost, created_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+        ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("run_llm_once cost record failed: %s", exc)
+    return text
 
 
 def _select_provider_for(settings: models.Settings, preferred: Optional[Provider] = None) -> Optional[Provider]:
@@ -437,10 +488,11 @@ def _rehydrate_run_input(payload: dict[str, Any]) -> RunIn:
     })
 
 
-def _cleanup_stale_runs(db: Session, older_than_minutes: int = 15) -> int:
+def _cleanup_stale_runs(db: Session, current_user: models.User, older_than_minutes: int = 15) -> int:
     cutoff = datetime.utcnow() - timedelta(minutes=older_than_minutes)
     runs = (
         db.query(models.AIRun)
+        .filter(models.AIRun.user_id == current_user.id)
         .filter(models.AIRun.status.in_(("queued", "running")))
         .filter(models.AIRun.created_at < cutoff)
         .all()
@@ -456,13 +508,46 @@ def _cleanup_stale_runs(db: Session, older_than_minutes: int = 15) -> int:
     return len(runs)
 
 
-def _enforce_daily_cost_cap(db: Session, settings: models.Settings) -> None:
+DEFAULT_CREDIT_CAP_USD = 10.0
+
+
+def _lifetime_ai_spend(db: Session, user_id: int) -> float:
+    total = (
+        db.query(func.sum(models.AIRun.cost_usd))
+        .filter(models.AIRun.user_id == user_id)
+        .filter(models.AIRun.cost_usd.isnot(None))
+        .scalar()
+    )
+    return float(total or 0.0)
+
+
+def _enforce_lifetime_credit_cap(db: Session, current_user: models.User) -> None:
+    """Admins are exempt. Everyone else is capped on total (not daily) AI spend."""
+    if current_user.is_admin:
+        return
+    cap = current_user.credit_cap_usd
+    if cap is None:
+        cap = DEFAULT_CREDIT_CAP_USD
+    if cap <= 0:
+        return
+    spent = _lifetime_ai_spend(db, current_user.id)
+    if spent >= cap:
+        raise HTTPException(
+            429,
+            f"AI credit used up (${spent:.4f} of ${cap:.2f} total). Contact an admin to raise your cap.",
+        )
+
+
+def _enforce_daily_cost_cap(db: Session, settings: models.Settings, current_user: models.User) -> None:
+    if current_user.is_admin:
+        return
     cap = settings.daily_cost_cap_usd
     if cap is None or cap <= 0:
         return
     start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     runs = (
         db.query(models.AIRun)
+        .filter(models.AIRun.user_id == settings.user_id)
         .filter(models.AIRun.created_at >= start)
         .filter(models.AIRun.cost_usd.isnot(None))
         .all()
@@ -511,18 +596,14 @@ def _allowed_tools_for(workflow: Workflow) -> list[str]:
     return list(WORKFLOW_TOOL_POLICY.get(workflow, SAFE_WEB_TOOLS))
 
 
-def _resolve_user_context(db: Session) -> dict[str, Any]:
+def _resolve_user_context(current_user: models.User) -> dict[str, Any]:
     """Build the {user, professor, document, grant} dict that prompts expect."""
-    user = db.get(models.User, 1)
-    if user is not None:
-        user_ctx = _shim(user)
-        user_ctx["education"] = [_shim(row) for row in user.education]
-        user_ctx["publications"] = [_shim(row) for row in user.publications]
-        user_ctx["experience"] = [_shim(row) for row in user.experience]
-        user_ctx["awards"] = [_shim(row) for row in user.awards]
-        user_ctx["references"] = [_shim(row) for row in user.references]
-    else:
-        user_ctx = _shim(None, default={})
+    user_ctx = _shim(current_user)
+    user_ctx["education"] = [_shim(row) for row in current_user.education]
+    user_ctx["publications"] = [_shim(row) for row in current_user.publications]
+    user_ctx["experience"] = [_shim(row) for row in current_user.experience]
+    user_ctx["awards"] = [_shim(row) for row in current_user.awards]
+    user_ctx["references"] = [_shim(row) for row in current_user.references]
     return {
         "user": user_ctx,
     }
@@ -918,8 +999,9 @@ def _tool_error(message: str) -> dict[str, Any]:
     return {"ok": False, "error": message}
 
 
-def _log(db: Session, action: str, professor_id: Optional[int] = None, detail: str = "") -> None:
+def _log(db: Session, user_id: int, action: str, professor_id: Optional[int] = None, detail: str = "") -> None:
     db.add(models.Activity(
+        user_id=user_id,
         date=date.today(),
         action=action,
         detail=detail,
@@ -990,15 +1072,12 @@ def _profile_child_config(section: str) -> tuple[type, set[str]] | None:
     return _USER_PROFILE_CHILD_SECTIONS.get(section)
 
 
-def _profile_child_query(db: Session, section: str) -> tuple[Any, Any] | None:
+def _profile_child_query(db: Session, current_user: models.User, section: str) -> tuple[Any, Any] | None:
     config = _profile_child_config(section)
     if not config:
         return None
     Model, _allowed = config
-    user = db.get(models.User, 1) or db.query(models.User).first()
-    if not user:
-        return None
-    return Model, db.query(Model).filter_by(user_id=user.id)
+    return Model, db.query(Model).filter_by(user_id=current_user.id)
 
 
 def _profile_child_payload(row: Any) -> dict[str, Any]:
@@ -1042,10 +1121,7 @@ def _sanitize_profile_child_values(Model: type, raw: dict[str, Any], allowed: se
     return values
 
 
-def _profile_payload(db: Session) -> dict[str, Any]:
-    user = db.get(models.User, 1) or db.query(models.User).first()
-    if not user:
-        return {}
+def _profile_payload(user: models.User) -> dict[str, Any]:
     payload = _jsonable(user)
     payload["education"] = [_jsonable(row) for row in user.education]
     payload["publications"] = [_jsonable(row) for row in user.publications]
@@ -1123,7 +1199,7 @@ def _document_payload(doc: models.Document, max_chars: int = 12000) -> dict[str,
     }
 
 
-async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) -> dict[str, Any]:
+async def _execute_agent_tool(db: Session, current_user: models.User, raw_name: str, args: dict[str, Any]) -> dict[str, Any]:
     name = OPENROUTER_TOOL_ALIASES.get(raw_name, raw_name)
     if "_invalid_arguments" in args:
         return _tool_error(f"Invalid JSON arguments for {name}.")
@@ -1131,7 +1207,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
     try:
         if name == "dashboard.get_overview":
             limit = _limit_arg(args, 8, 20)
-            professors = db.query(models.Professor).all()
+            professors = db.query(models.Professor).filter(models.Professor.user_id == current_user.id).all()
             by_status: dict[str, int] = {}
             by_tier: dict[str, int] = {}
             for prof in professors:
@@ -1140,6 +1216,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             drafts = (
                 db.query(models.EmailDraft)
                 .filter(
+                    models.EmailDraft.user_id == current_user.id,
                     models.EmailDraft.is_backup == False,  # noqa: E712
                     models.EmailDraft.sent_at.is_(None),
                     models.EmailDraft.skipped_at.is_(None),
@@ -1150,12 +1227,14 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             )
             activity = (
                 db.query(models.Activity)
+                .filter(models.Activity.user_id == current_user.id)
                 .order_by(models.Activity.created_at.desc())
                 .limit(limit)
                 .all()
             )
             runs = (
                 db.query(models.AIRun)
+                .filter(models.AIRun.user_id == current_user.id)
                 .order_by(models.AIRun.id.desc())
                 .limit(min(limit, 10))
                 .all()
@@ -1165,6 +1244,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
                 "by_status": by_status,
                 "by_tier": by_tier,
                 "active_draft_count": db.query(models.EmailDraft).filter(
+                    models.EmailDraft.user_id == current_user.id,
                     models.EmailDraft.is_backup == False,  # noqa: E712
                     models.EmailDraft.sent_at.is_(None),
                     models.EmailDraft.skipped_at.is_(None),
@@ -1175,17 +1255,13 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             })
 
         if name == "profile.get":
-            return _tool_ok(_profile_payload(db))
+            return _tool_ok(_profile_payload(current_user))
 
         if name == "profile.update":
             patch = args.get("patch")
             if not isinstance(patch, dict) or not patch:
                 return _tool_error("Provide a profile patch object.")
-            user = db.get(models.User, 1) or db.query(models.User).first()
-            if not user:
-                user = models.User(id=1, name="")
-                db.add(user)
-                db.flush()
+            user = current_user
             if patch.get("name") is None and "name" in patch:
                 patch = {**patch, "name": ""}
             changed = _apply_patch_fields(user, patch, {"id", "created_at", "updated_at"})
@@ -1194,16 +1270,14 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             user.updated_at = datetime.utcnow()
             db.commit()
             db.refresh(user)
-            _log(db, f"Quill updated profile fields: {', '.join(changed)}")
-            return _tool_ok({"updated": changed, "profile": _profile_payload(db)})
+            _log(db, current_user.id, f"Quill updated profile fields: {', '.join(changed)}")
+            return _tool_ok({"updated": changed, "profile": _profile_payload(user)})
 
         if name == "profile.verify_field":
             field_name = str(args.get("field_name") or "").strip()
             if not field_name:
                 return _tool_error("field_name is required.")
-            user = db.get(models.User, 1) or db.query(models.User).first()
-            if not user:
-                return _tool_error("Profile not found.")
+            user = current_user
             prov = dict(user.field_provenance or {})
             entry = dict(prov.get(field_name) or {})
             entry["verified_by_user"] = True
@@ -1212,12 +1286,12 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             user.field_provenance = prov
             user.updated_at = datetime.utcnow()
             db.commit()
-            _log(db, f"Quill verified profile field: {field_name}")
+            _log(db, current_user.id, f"Quill verified profile field: {field_name}")
             return _tool_ok({"field": field_name, "provenance": entry})
 
         if name == "profile.list_section":
             section = str(args.get("section") or "").strip()
-            result = _profile_child_query(db, section)
+            result = _profile_child_query(db, current_user, section)
             if not result:
                 return _tool_error("Unknown profile section or profile not found.")
             Model, query = result
@@ -1240,11 +1314,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             if not config:
                 return _tool_error("Unknown profile section.")
             Model, allowed = config
-            user = db.get(models.User, 1) or db.query(models.User).first()
-            if not user:
-                user = models.User(id=1, name="")
-                db.add(user)
-                db.flush()
+            user = current_user
             values = _sanitize_profile_child_values(Model, item, allowed)
             required_error = _profile_child_required_error(Model, values)
             if required_error:
@@ -1257,7 +1327,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             user.updated_at = datetime.utcnow()
             db.commit()
             db.refresh(row)
-            _log(db, f"Quill added profile {section} item")
+            _log(db, current_user.id, f"Quill added profile {section} item")
             return _tool_ok({"section": section, "item": _profile_child_payload(row)})
 
         if name == "profile.update_section_item":
@@ -1266,7 +1336,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             patch = args.get("patch")
             if not isinstance(patch, dict) or not patch:
                 return _tool_error("Provide a patch object.")
-            result = _profile_child_query(db, section)
+            result = _profile_child_query(db, current_user, section)
             if not result:
                 return _tool_error("Unknown profile section or profile not found.")
             Model, query = result
@@ -1279,12 +1349,10 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
                 return _tool_error("No supported profile section fields provided.")
             for key, value in values.items():
                 setattr(row, key, value)
-            user = db.get(models.User, row.user_id)
-            if user:
-                user.updated_at = datetime.utcnow()
+            current_user.updated_at = datetime.utcnow()
             db.commit()
             db.refresh(row)
-            _log(db, f"Quill updated profile {section} item #{row.id}")
+            _log(db, current_user.id, f"Quill updated profile {section} item #{row.id}")
             return _tool_ok({
                 "section": section,
                 "updated": sorted(values.keys()),
@@ -1293,7 +1361,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
 
         if name == "professors.search":
             limit = _limit_arg(args, 12, 50)
-            query = db.query(models.Professor)
+            query = db.query(models.Professor).filter(models.Professor.user_id == current_user.id)
             if args.get("status"):
                 query = query.filter(models.Professor.status == str(args["status"]))
             if args.get("tier"):
@@ -1325,11 +1393,13 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
 
         if name == "professors.get":
             prof = db.get(models.Professor, int(args.get("professor_id") or 0))
+            if prof and prof.user_id != current_user.id:
+                prof = None
             return _tool_ok(_jsonable(prof)) if prof else _tool_error("Professor not found.")
 
         if name == "professors.update":
             prof = db.get(models.Professor, int(args.get("professor_id") or 0))
-            if not prof:
+            if not prof or prof.user_id != current_user.id:
                 return _tool_error("Professor not found.")
             patch = args.get("patch")
             if not isinstance(patch, dict) or not patch:
@@ -1340,12 +1410,13 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             prof.updated_at = datetime.utcnow()
             db.commit()
             db.refresh(prof)
-            _log(db, f"Quill updated professor fields for {prof.name}: {', '.join(changed)}", professor_id=prof.id)
+            _log(db, current_user.id, f"Quill updated professor fields for {prof.name}: {', '.join(changed)}", professor_id=prof.id)
             return _tool_ok({"updated": changed, "professor": _jsonable(prof)})
 
         if name == "papers.list_for_professor":
             pid = int(args.get("professor_id") or 0)
-            if not db.get(models.Professor, pid):
+            prof = db.get(models.Professor, pid)
+            if not prof or prof.user_id != current_user.id:
                 return _tool_error("Professor not found.")
             rows = (
                 db.query(models.ProfessorPaper)
@@ -1357,7 +1428,9 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             return _tool_ok([_jsonable(row) for row in rows])
 
         if name == "drafts.list":
-            query = db.query(models.EmailDraft).filter(models.EmailDraft.is_backup == False)  # noqa: E712
+            query = db.query(models.EmailDraft).filter(
+                models.EmailDraft.user_id == current_user.id, models.EmailDraft.is_backup == False  # noqa: E712
+            )
             if args.get("professor_id"):
                 query = query.filter(models.EmailDraft.professor_id == int(args["professor_id"]))
             if not args.get("include_skipped"):
@@ -1376,12 +1449,14 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
 
         if name == "drafts.get":
             draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
+            if draft and draft.user_id != current_user.id:
+                draft = None
             return _tool_ok(_draft_full(draft)) if draft else _tool_error("Draft not found.")
 
         if name == "drafts.create":
             pid = int(args.get("professor_id") or 0)
             prof = db.get(models.Professor, pid)
-            if not prof:
+            if not prof or prof.user_id != current_user.id:
                 return _tool_error("Professor not found.")
             subject = str(args.get("subject") or "").strip()
             body = str(args.get("body") or "").strip()
@@ -1393,6 +1468,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
                 models.EmailDraft.sent_at.is_(None),
             ).update({"is_backup": True})
             draft = models.EmailDraft(
+                user_id=current_user.id,
                 professor_id=pid,
                 subject=subject,
                 body=body,
@@ -1401,12 +1477,12 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             db.add(draft)
             db.commit()
             db.refresh(draft)
-            _log(db, f"Quill created draft for {prof.name}", professor_id=prof.id)
+            _log(db, current_user.id, f"Quill created draft for {prof.name}", professor_id=prof.id)
             return _tool_ok(_draft_full(draft))
 
         if name == "drafts.update":
             draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
-            if not draft:
+            if not draft or draft.user_id != current_user.id:
                 return _tool_error("Draft not found.")
             changed: list[str] = []
             if "subject" in args and args["subject"] is not None:
@@ -1421,31 +1497,31 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             db.commit()
             db.refresh(draft)
             if draft.professor:
-                _log(db, f"Quill updated draft {', '.join(changed)} for {draft.professor.name}", professor_id=draft.professor.id)
+                _log(db, current_user.id, f"Quill updated draft {', '.join(changed)} for {draft.professor.name}", professor_id=draft.professor.id)
             return _tool_ok({"updated": changed, "draft": _draft_full(draft)})
 
         if name == "drafts.skip":
             draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
-            if not draft:
+            if not draft or draft.user_id != current_user.id:
                 return _tool_error("Draft not found.")
             draft.skipped_at = datetime.utcnow()
             db.commit()
             db.refresh(draft)
-            _log(db, f"Quill skipped draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
+            _log(db, current_user.id, f"Quill skipped draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
             return _tool_ok(_draft_full(draft))
 
         if name == "drafts.unskip":
             draft = db.get(models.EmailDraft, int(args.get("draft_id") or 0))
-            if not draft:
+            if not draft or draft.user_id != current_user.id:
                 return _tool_error("Draft not found.")
             draft.skipped_at = None
             db.commit()
             db.refresh(draft)
-            _log(db, f"Quill restored draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
+            _log(db, current_user.id, f"Quill restored draft for {draft.professor.name if draft.professor else draft.id}", professor_id=draft.professor_id)
             return _tool_ok(_draft_full(draft))
 
         if name == "documents.list":
-            query = db.query(models.Document)
+            query = db.query(models.Document).filter(models.Document.user_id == current_user.id)
             if args.get("kind"):
                 query = query.filter(models.Document.kind == str(args["kind"]))
             rows = (
@@ -1463,14 +1539,14 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
 
         if name == "documents.get":
             doc = db.get(models.Document, int(args.get("document_id") or 0))
-            if not doc:
+            if not doc or doc.user_id != current_user.id:
                 return _tool_error("Document not found.")
             return _tool_ok(_document_payload(doc, _max_chars_arg(args)))
 
         if name == "calendar.list_events":
             from datetime import date as _date
 
-            query = db.query(models.CalendarEvent)
+            query = db.query(models.CalendarEvent).filter(models.CalendarEvent.user_id == current_user.id)
             if args.get("from_date"):
                 try:
                     query = query.filter(models.CalendarEvent.date >= _date.fromisoformat(str(args["from_date"])))
@@ -1499,6 +1575,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             except ValueError:
                 return _tool_error("Invalid date. Use YYYY-MM-DD.")
             event = models.CalendarEvent(
+                user_id=current_user.id,
                 title=title,
                 date=event_date,
                 time=args.get("time"),
@@ -1510,11 +1587,11 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
             db.add(event)
             db.commit()
             db.refresh(event)
-            _log(db, f"Quill added calendar event: {event.title}")
+            _log(db, current_user.id, f"Quill added calendar event: {event.title}")
             return _tool_ok(_jsonable(event))
 
         if name == "grants.list":
-            query = db.query(models.Grant)
+            query = db.query(models.Grant).filter(models.Grant.user_id == current_user.id)
             if args.get("status"):
                 query = query.filter(models.Grant.status == str(args["status"]))
             if args.get("q"):
@@ -1535,6 +1612,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
         if name == "activity.list":
             rows = (
                 db.query(models.Activity)
+                .filter(models.Activity.user_id == current_user.id)
                 .order_by(models.Activity.created_at.desc())
                 .limit(_limit_arg(args, 20, 100))
                 .all()
@@ -1554,7 +1632,7 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
                 max_turns=12,
                 timeout_s=300,
             )
-            ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+            ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, current_user, req)
             asyncio.create_task(_drain_run(ai_run.id, run_request, provider, cli_path, provider_env))
             return _tool_ok({
                 "id": ai_run.id,
@@ -1567,10 +1645,12 @@ async def _execute_agent_tool(db: Session, raw_name: str, args: dict[str, Any]) 
 
         if name == "ai.get_run":
             run = db.get(models.AIRun, int(args.get("run_id") or 0))
+            if run and run.user_id != current_user.id:
+                run = None
             return _tool_ok(_run_payload(run)) if run else _tool_error("AI run not found.")
 
         if name == "ai.list_runs":
-            query = db.query(models.AIRun)
+            query = db.query(models.AIRun).filter(models.AIRun.user_id == current_user.id)
             if args.get("workflow"):
                 query = query.filter(models.AIRun.workflow == str(args["workflow"]))
             if args.get("status"):
@@ -1618,36 +1698,33 @@ def _discovery_tokens(text: str) -> set[str]:
     }
 
 
-def _discovery_profile_publication_tokens(db: Session) -> set[str]:
-    user = db.query(models.User).first()
-    parts: list[str] = []
-    if user:
+def _discovery_profile_publication_tokens(db: Session, user: models.User) -> set[str]:
+    parts: list[str] = [
+        user.headline or "",
+        user.research_interests or "",
+        _jsonish_text(user.research_categories),
+        _jsonish_text(user.methods),
+        _jsonish_text(user.application_domains),
+        _jsonish_text(user.tools_frameworks),
+        _jsonish_text(user.datasets_used),
+        _jsonish_text(user.datasets_created),
+    ]
+    publications = (
+        db.query(models.UserPublication)
+        .filter(models.UserPublication.user_id == user.id)
+        .order_by(models.UserPublication.is_signature.desc(), models.UserPublication.year.desc())
+        .limit(12)
+        .all()
+    )
+    for pub in publications:
         parts.extend([
-            user.headline or "",
-            user.research_interests or "",
-            _jsonish_text(user.research_categories),
-            _jsonish_text(user.methods),
-            _jsonish_text(user.application_domains),
-            _jsonish_text(user.tools_frameworks),
-            _jsonish_text(user.datasets_used),
-            _jsonish_text(user.datasets_created),
+            pub.title or "",
+            pub.abstract or "",
+            pub.one_line_takeaway or "",
+            pub.venue_short or "",
+            pub.venue_full_name or "",
+            pub.type or "",
         ])
-        publications = (
-            db.query(models.UserPublication)
-            .filter(models.UserPublication.user_id == user.id)
-            .order_by(models.UserPublication.is_signature.desc(), models.UserPublication.year.desc())
-            .limit(12)
-            .all()
-        )
-        for pub in publications:
-            parts.extend([
-                pub.title or "",
-                pub.abstract or "",
-                pub.one_line_takeaway or "",
-                pub.venue_short or "",
-                pub.venue_full_name or "",
-                pub.type or "",
-            ])
 
     return _discovery_tokens("\n".join(parts))
 
@@ -1926,7 +2003,7 @@ async def _verify_discovery_candidate(candidate: dict[str, Any], query_tokens: s
 # ───────────────────────────────────────────────────────────────────
 # Post-run result application
 # ───────────────────────────────────────────────────────────────────
-async def _apply_workflow_result(db: Session, request: RunRequest, full_text: str) -> None:
+async def _apply_workflow_result(db: Session, user: models.User, request: RunRequest, full_text: str) -> None:
     """Parse JSON from AI output and write relevant fields to the DB."""
     from ai.runner import extract_json_payload, Workflow  # local to avoid circular import
 
@@ -2001,6 +2078,7 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
             ).update({"is_backup": True})
 
             draft = models.EmailDraft(
+                user_id=user.id,
                 professor_id=request.professor_id,
                 subject=subject,
                 body=body,
@@ -2010,9 +2088,6 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
             db.commit()
 
     elif request.workflow == Workflow.EXTRACT_PROFILE:
-        user = db.query(models.User).first()
-        if not user:
-            return
         field_map = {
             "full_name": "name",
             "current_role": "current_role",
@@ -2034,12 +2109,12 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
         db.commit()
 
     elif request.workflow == Workflow.EXTRACT_USER_PROFILE_FULL:
-        _apply_user_profile_extraction(db, payload)
+        _apply_user_profile_extraction(db, user, payload)
 
     elif request.workflow == Workflow.DISCOVER_PROFESSORS:
         professors = payload.get("professors", [])
         allowed_countries = _normalize_country_filter(request.params.get("target_countries"))
-        query_tokens = _discovery_profile_publication_tokens(db)
+        query_tokens = _discovery_profile_publication_tokens(db, user)
         for p in professors:
             if not p.get("name") or not p.get("university"):
                 continue
@@ -2051,6 +2126,7 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
             p = verified
             existing = (
                 db.query(models.Professor.id)
+                .filter(models.Professor.user_id == user.id)
                 .filter(func.lower(models.Professor.name) == str(p["name"]).strip().lower())
                 .filter(func.lower(models.Professor.university) == str(p["university"]).strip().lower())
                 .first()
@@ -2060,6 +2136,7 @@ async def _apply_workflow_result(db: Session, request: RunRequest, full_text: st
             position_type = p.get("position_type") or request.params.get("position_type") or None
             hiring_signal = p.get("hiring_signals")
             prof = models.Professor(
+                user_id=user.id,
                 name=str(p["name"]).strip(),
                 university=str(p["university"]).strip(),
                 dept_lab=p.get("dept_lab") or "",
@@ -2184,19 +2261,13 @@ def _parse_iso_date(v):
         return None
 
 
-def _apply_user_profile_extraction(db: Session, payload: dict[str, Any]) -> None:
+def _apply_user_profile_extraction(db: Session, user: models.User, payload: dict[str, Any]) -> None:
     """Upsert AI-extracted profile data into users + child tables.
 
     Honours user.field_provenance[field].verified_by_user: any scalar field
     flagged verified is left untouched. Child tables are replaced wholesale
     (the AI receives existing_profile and is told to preserve verified items).
     """
-    user = db.get(models.User, 1)
-    if not user:
-        user = models.User(id=1, name="")
-        db.add(user)
-        db.flush()
-
     existing_prov = dict(user.field_provenance or {})
     new_prov_from_ai = dict(payload.get("field_provenance") or {})
 
@@ -2254,17 +2325,12 @@ def _apply_user_profile_extraction(db: Session, payload: dict[str, Any]) -> None
     db.commit()
 
 
-def _build_user_extraction_context(db: Session, request: RunRequest) -> None:
+def _build_user_extraction_context(db: Session, user: models.User, request: RunRequest) -> None:
     """Resolve CV / transcripts / personal page texts and inject into request.params.
 
     Reads users.cv_doc_id, users.transcript_doc_ids, users.website, and the
     current users row (as existing_profile, minus id / timestamps).
     """
-    user = db.get(models.User, 1)
-    if not user:
-        request.params.setdefault("cv_text", "")
-        return
-
     # CV — mandatory but we don't raise here; the prompt will surface the gap.
     cv_text = ""
     if user.cv_doc_id:
@@ -2331,6 +2397,7 @@ async def _run_and_stream(
             run.status = "running"
             run.started_at = datetime.utcnow()
             db.commit()
+        run_user = db.get(models.User, run.user_id) if run else None
 
         # Initial sentinel so the client knows the run id immediately.
         head = StreamEvent(kind="run_id", data={"id": run_id, "provider": provider.value, "workflow": request.workflow.value})
@@ -2382,8 +2449,8 @@ async def _run_and_stream(
                 yield s2_evt.to_sse().encode()
 
         # For extract_user_profile_full: build context from CV + transcripts + personal page.
-        if request.workflow == Workflow.EXTRACT_USER_PROFILE_FULL:
-            _build_user_extraction_context(db, request)
+        if request.workflow == Workflow.EXTRACT_USER_PROFILE_FULL and run_user is not None:
+            _build_user_extraction_context(db, run_user, request)
 
         # For draft_email: inject saved papers as context.
         if request.workflow == Workflow.DRAFT_EMAIL and request.professor_id:
@@ -2406,10 +2473,10 @@ async def _run_and_stream(
                     for p in papers
                 ]
 
-        if provider == Provider.OPENROUTER_API and request.workflow == Workflow.CHAT:
+        if provider == Provider.OPENROUTER_API and request.workflow == Workflow.CHAT and run_user is not None:
             request.openrouter_tools = _agent_tool_schemas()
             request.openrouter_tool_aliases = OPENROUTER_TOOL_ALIASES
-            request.tool_executor = lambda name, args: _execute_agent_tool(db, name, args)
+            request.tool_executor = lambda name, args: _execute_agent_tool(db, run_user, name, args)
 
         got_done = False
         try:
@@ -2483,8 +2550,8 @@ async def _run_and_stream(
             db.commit()
 
         # Write workflow-specific results back to the DB.
-        if run and run.status == "done":
-            await _apply_workflow_result(db, request, full_text or last_event.get("result") or "")
+        if run and run.status == "done" and run_user is not None:
+            await _apply_workflow_result(db, run_user, request, full_text or last_event.get("result") or "")
     except Exception as exc:
         # Any unhandled exception (template render error, subprocess crash, etc.)
         # must flip the row to "failed" so it never stays stuck at "running".
@@ -2527,6 +2594,7 @@ async def _run_and_stream(
 # ───────────────────────────────────────────────────────────────────
 def _prepare_ai_run(
     db: Session,
+    current_user: models.User,
     req: RunIn,
     *,
     provider_override: Optional[Provider] = None,
@@ -2562,8 +2630,9 @@ def _prepare_ai_run(
                 f"Pass it as a top-level field on the request body, not inside `params`.",
             )
 
-    settings = _settings(db)
-    _enforce_daily_cost_cap(db, settings)
+    settings = _settings(db, current_user)
+    _enforce_daily_cost_cap(db, settings, current_user)
+    _enforce_lifetime_credit_cap(db, current_user)
     preferred_provider = None
     if req.preferred_provider:
         try:
@@ -2585,19 +2654,19 @@ def _prepare_ai_run(
     provider_env = _provider_env_for(settings, provider)
 
     # Hydrate the user/professor/document/grant Jinja vars if the prompt expects them.
-    base_ctx = _resolve_user_context(db)
+    base_ctx = _resolve_user_context(current_user)
     base_ctx["api_base"] = _runtime_api_base()
     if req.professor_id is not None:
         prof = db.get(models.Professor, req.professor_id)
-        if prof is not None:
+        if prof is not None and prof.user_id == current_user.id:
             base_ctx["professor"] = _shim(prof)
     if req.document_id is not None:
         doc = db.get(models.Document, req.document_id)
-        if doc is not None:
+        if doc is not None and doc.user_id == current_user.id:
             base_ctx["document"] = _shim(doc)
     if req.grant_id is not None:
         grant = db.get(models.Grant, req.grant_id)
-        if grant is not None:
+        if grant is not None and grant.user_id == current_user.id:
             base_ctx["grant"] = _shim(grant)
     params = {**base_ctx, **req.params}
 
@@ -2626,6 +2695,7 @@ def _prepare_ai_run(
         pass
 
     ai_run = models.AIRun(
+        user_id=current_user.id,
         workflow=workflow.value,
         provider=provider.value,
         status="queued",
@@ -2655,13 +2725,13 @@ async def _drain_run(
 
 
 @router.post("/run")
-def run_workflow(req: RunIn, request: Request, db: Session = Depends(get_db)):
+def run_workflow(req: RunIn, request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Start a workflow and stream its events as SSE.
 
     The first event is `run_id` — the client should capture it.
     """
     _verify_ai_request(request)
-    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, current_user, req)
 
     return StreamingResponse(
         _run_and_stream(ai_run.id, run_request, provider, cli_path, provider_env),
@@ -2679,29 +2749,30 @@ def start_background_workflow(
     req: RunIn,
     background_tasks: BackgroundTasks,
     request: Request,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Start a workflow and keep draining it after the HTTP response closes."""
     _verify_ai_request(request)
-    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, req)
+    ai_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(db, current_user, req)
     background_tasks.add_task(_drain_run, ai_run.id, run_request, provider, cli_path, provider_env)
     return ai_run
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)
-def get_run(run_id: int, db: Session = Depends(get_db)):
-    _cleanup_stale_runs(db)
+def get_run(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _cleanup_stale_runs(db, current_user)
     run = db.get(models.AIRun, run_id)
-    if not run:
+    if not run or run.user_id != current_user.id:
         raise HTTPException(404, "AI run not found")
     return run
 
 
 @router.post("/runs/{run_id}/cancel")
-def cancel_run(run_id: int, db: Session = Depends(get_db)):
+def cancel_run(run_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Mark a stuck running/queued run as cancelled."""
     run = db.get(models.AIRun, run_id)
-    if not run:
+    if not run or run.user_id != current_user.id:
         raise HTTPException(404, "AI run not found")
     if run.status not in ("running", "queued"):
         raise HTTPException(400, f"Run is already {run.status}")
@@ -2717,20 +2788,21 @@ def retry_run(
     payload: RetryRunIn,
     background_tasks: BackgroundTasks,
     request: Request,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Create and start a replacement run from the saved request metadata."""
     _verify_ai_request(request)
-    _cleanup_stale_runs(db)
+    _cleanup_stale_runs(db, current_user)
     old = db.get(models.AIRun, run_id)
-    if not old:
+    if not old or old.user_id != current_user.id:
         raise HTTPException(404, "AI run not found")
     if old.status in ("queued", "running"):
         raise HTTPException(400, f"Run is still {old.status}; cancel it before retrying.")
     if not old.request_json:
         raise HTTPException(409, "This run was created before retry metadata existed.")
 
-    settings = _settings(db)
+    settings = _settings(db, current_user)
     provider_override = None
     if payload.use_fallback_provider:
         provider_override = _select_fallback_provider(settings, old.provider)
@@ -2747,6 +2819,7 @@ def retry_run(
     req = _rehydrate_run_input(old.request_json)
     new_run, run_request, provider, cli_path, provider_env = _prepare_ai_run(
         db,
+        current_user,
         req,
         provider_override=provider_override,
         retry_of_run_id=old.id,
@@ -2763,15 +2836,16 @@ def retry_run(
 
 
 @router.post("/recover-stale-runs")
-def recover_stale_runs(db: Session = Depends(get_db)):
-    return {"updated": _cleanup_stale_runs(db, older_than_minutes=15)}
+def recover_stale_runs(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {"updated": _cleanup_stale_runs(db, current_user, older_than_minutes=15)}
 
 
 @router.get("/runs", response_model=list[RunOut])
-def list_runs(limit: int = 50, db: Session = Depends(get_db)):
-    _cleanup_stale_runs(db)
+def list_runs(limit: int = 50, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _cleanup_stale_runs(db, current_user)
     return (
         db.query(models.AIRun)
+        .filter(models.AIRun.user_id == current_user.id)
         .order_by(models.AIRun.id.desc())
         .limit(min(limit, 200))
         .all()
@@ -2779,9 +2853,9 @@ def list_runs(limit: int = 50, db: Session = Depends(get_db)):
 
 
 @router.get("/providers")
-def providers_status(db: Session = Depends(get_db)):
+def providers_status(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Tells the UI which providers are available right now."""
-    s = _settings(db)
+    s = _settings(db, current_user)
     claude_path = resolve_cli_path("claude", s.claude_cli_path)
     codex_path = resolve_cli_path("codex", s.codex_cli_path)
     return {
@@ -2806,9 +2880,9 @@ def providers_status(db: Session = Depends(get_db)):
 
 
 @router.get("/provider-setup")
-def provider_setup_status(db: Session = Depends(get_db)):
+def provider_setup_status(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Detailed local CLI setup status for the Settings connector wizard."""
-    s = _settings(db)
+    s = _settings(db, current_user)
     return {
         "platform": platform.system(),
         "providers": {
@@ -2819,7 +2893,7 @@ def provider_setup_status(db: Session = Depends(get_db)):
 
 
 @router.post("/provider-setup")
-def provider_setup_action(payload: ProviderSetupIn, request: Request, db: Session = Depends(get_db)):
+def provider_setup_action(payload: ProviderSetupIn, request: Request, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Open an allowlisted provider install/login command in Terminal.
 
     This endpoint intentionally does not accept arbitrary shell text. The UI
@@ -2831,7 +2905,7 @@ def provider_setup_action(payload: ProviderSetupIn, request: Request, db: Sessio
     if payload.action not in {"install", "login"}:
         raise HTTPException(400, "Unsupported setup action.")
 
-    s = _settings(db)
+    s = _settings(db, current_user)
     before = _provider_setup_status(
         payload.provider,
         s.claude_cli_path if payload.provider == "claude_cli" else s.codex_cli_path,

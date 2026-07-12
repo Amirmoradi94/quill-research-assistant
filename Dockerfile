@@ -1,5 +1,9 @@
 FROM node:22-bookworm-slim AS web-build
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build/web
 
 COPY web/package.json web/package-lock.json ./

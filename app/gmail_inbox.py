@@ -153,7 +153,7 @@ def _fetch_message(m: imaplib.IMAP4_SSL, uid: bytes) -> email.message.Message | 
     return email.message_from_bytes(raw)
 
 
-def check_replies(db: Session, since_days: int = 180) -> dict:
+def check_replies(db: Session, settings: models.Settings, since_days: int = 180) -> dict:
     """Scan Gmail for replies to sent drafts. Returns a summary dict.
 
     Strategy:
@@ -173,7 +173,6 @@ def check_replies(db: Session, since_days: int = 180) -> dict:
     cascade-fail. One SINCE search plus one batched fetch is both reliable
     and far faster.
     """
-    settings = db.query(models.Settings).first()
     if not settings:
         raise InboxError("Settings row missing.")
 
@@ -182,6 +181,7 @@ def check_replies(db: Session, since_days: int = 180) -> dict:
     drafts = (
         db.query(models.EmailDraft)
         .filter(
+            models.EmailDraft.user_id == settings.user_id,
             models.EmailDraft.sent_at.isnot(None),
             models.EmailDraft.is_backup == False,  # noqa: E712
         )
@@ -269,6 +269,7 @@ def check_replies(db: Session, since_days: int = 180) -> dict:
                 subject = _decode_header(hdr.get("Subject"))
                 is_meeting = _looks_like_meeting_request(subject, body)
                 reply = models.EmailReply(
+                    user_id=settings.user_id,
                     draft_id=draft.id,
                     professor_id=draft.professor_id,
                     received_at=received,
@@ -320,41 +321,54 @@ _TICK_SECONDS = 60
 
 
 async def _poller_loop() -> None:
-    """Long-running async loop. Polls every minute, runs check_replies()
-    when (a) enabled is on, (b) Gmail is configured, and (c) enough time
-    has passed since last run."""
+    """Long-running async loop. Polls every minute; for every user whose
+    Settings have reply-checking enabled, runs check_replies() when (a)
+    Gmail is configured and (b) enough time has passed since that user's
+    last run. Each user's check is isolated in its own try/except so one
+    user's bad Gmail credentials can't stop the loop from reaching the rest."""
     while True:
         try:
             await asyncio.sleep(_TICK_SECONDS)
             with SessionLocal() as db:
-                settings = db.query(models.Settings).first()
-                if not settings or not settings.reply_check_enabled:
-                    continue
-                if not (settings.gmail_address and settings.gmail_app_password_encrypted):
-                    continue
-                interval_h = max(1, settings.reply_check_interval_hours or 4)
-                last = settings.reply_check_last_run_at
-                now = datetime.utcnow()
-                if last and (now - last).total_seconds() < interval_h * 3600:
-                    continue
-                # Time to poll.
-                log.info("Auto reply-check: starting (interval=%dh)", interval_h)
-                try:
-                    result = check_replies(db)
-                    settings.reply_check_last_run_at = datetime.utcnow()
-                    settings.reply_check_last_status = {
-                        "checked": result.get("checked", 0),
-                        "new_replies": result.get("new_replies", 0),
-                        "errors_count": len(result.get("errors", [])),
-                    }
-                    settings.reply_check_last_error = None
-                    db.commit()
-                    log.info("Auto reply-check: %s", settings.reply_check_last_status)
-                except InboxError as exc:
-                    settings.reply_check_last_run_at = datetime.utcnow()
-                    settings.reply_check_last_error = str(exc)
-                    db.commit()
-                    log.warning("Auto reply-check failed: %s", exc)
+                enabled_settings = (
+                    db.query(models.Settings)
+                    .filter(models.Settings.reply_check_enabled == True)  # noqa: E712
+                    .all()
+                )
+                for settings in enabled_settings:
+                    if not (settings.gmail_address and settings.gmail_app_password_encrypted):
+                        continue
+                    interval_h = max(1, settings.reply_check_interval_hours or 4)
+                    last = settings.reply_check_last_run_at
+                    now = datetime.utcnow()
+                    if last and (now - last).total_seconds() < interval_h * 3600:
+                        continue
+                    # Time to poll.
+                    log.info("Auto reply-check: starting for user_id=%s (interval=%dh)", settings.user_id, interval_h)
+                    try:
+                        result = check_replies(db, settings)
+                        settings.reply_check_last_run_at = datetime.utcnow()
+                        settings.reply_check_last_status = {
+                            "checked": result.get("checked", 0),
+                            "new_replies": result.get("new_replies", 0),
+                            "errors_count": len(result.get("errors", [])),
+                        }
+                        settings.reply_check_last_error = None
+                        db.commit()
+                        log.info("Auto reply-check for user_id=%s: %s", settings.user_id, settings.reply_check_last_status)
+                    except InboxError as exc:
+                        settings.reply_check_last_run_at = datetime.utcnow()
+                        settings.reply_check_last_error = str(exc)
+                        db.commit()
+                        log.warning("Auto reply-check failed for user_id=%s: %s", settings.user_id, exc)
+                    except Exception as exc:
+                        # Isolate unexpected per-user failures so the loop still
+                        # reaches every other enabled user this tick.
+                        db.rollback()
+                        settings.reply_check_last_run_at = datetime.utcnow()
+                        settings.reply_check_last_error = str(exc)
+                        db.commit()
+                        log.exception("Auto reply-check crashed for user_id=%s", settings.user_id)
         except asyncio.CancelledError:
             log.info("Reply poller cancelled")
             return

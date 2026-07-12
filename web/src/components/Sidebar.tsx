@@ -13,6 +13,7 @@ import {
   Settings,
   User as UserIcon,
   Zap,
+  ShieldCheck,
 } from 'lucide-react'
 import quillLogoMark from '@/assets/brand/quill-logo-mark.png'
 
@@ -38,7 +39,18 @@ const NAV_INSIGHTS: ReadonlyArray<{ to: string; label: string; icon: typeof Tren
 //   { to: '/ai-runs',  label: 'AI Runs',  icon: Zap },
 // ] as const
 
-export function Sidebar({ user }: { user: { name: string; email: string | null } }) {
+export function Sidebar({
+  user,
+}: {
+  user: {
+    name: string
+    email: string | null
+    isAdmin: boolean
+    creditCapUsd: number | null
+    creditUsedUsd: number | null
+    creditRemainingUsd: number | null
+  }
+}) {
   return (
     <aside
       className="flex h-full min-h-0 flex-col py-4 px-3 text-[15px] border-r"
@@ -76,9 +88,49 @@ export function Sidebar({ user }: { user: { name: string; email: string | null }
         )}
 
         <div className="my-2 flex-1" />
+
+        {!user.isAdmin && user.creditCapUsd !== null && (
+          <CreditWidget
+            cap={user.creditCapUsd}
+            used={user.creditUsedUsd ?? 0}
+            remaining={user.creditRemainingUsd ?? user.creditCapUsd}
+          />
+        )}
+
+        {user.isAdmin && <NavItem to="/admin" label="Admin" icon={ShieldCheck} />}
         <NavItem to="/settings" label="Settings" icon={Settings} />
       </nav>
     </aside>
+  )
+}
+
+function CreditWidget({ cap, used, remaining }: { cap: number; used: number; remaining: number }) {
+  const pct = cap > 0 ? Math.min(100, Math.round((used / cap) * 100)) : 0
+  return (
+    <div
+      className="mb-2 rounded-md border px-2.5 py-2 text-[12px]"
+      style={{ borderColor: 'var(--color-line)', background: 'var(--color-white)' }}
+    >
+      <div className="flex items-center justify-between">
+        <span style={{ color: 'var(--color-ink-soft)' }}>Quill credit</span>
+        <span className="font-mono font-semibold" style={{ color: 'var(--color-ink)' }}>
+          ${remaining.toFixed(2)}
+        </span>
+      </div>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'var(--color-paper)' }}>
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${pct}%`,
+            background: pct >= 100 ? 'var(--color-rose-500, #e11d48)' : 'var(--color-ink)',
+          }}
+        />
+      </div>
+      <div className="mt-1 flex items-center justify-between" style={{ color: 'var(--color-muted)' }}>
+        <span>${used.toFixed(2)} used</span>
+        <span>${cap.toFixed(2)} total</span>
+      </div>
+    </div>
   )
 }
 

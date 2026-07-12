@@ -131,14 +131,14 @@ class SendError(RuntimeError):
     """Raised when a draft cannot be sent. The HTTP layer maps this to 400."""
 
 
-def send_draft(db: Session, draft_id: int) -> dict:
+def send_draft(db: Session, current_user: models.User, draft_id: int) -> dict:
     """Send a draft via Gmail SMTP. Stamps the draft + professor on success.
 
     Raises SendError with a user-friendly message on any failure (no Gmail
     creds, no professor email, blank body, SMTP failure, …).
     Returns a dict of the post-send draft state for the API to echo back.
     """
-    settings = db.get(models.Settings, 1)
+    settings = db.query(models.Settings).filter_by(user_id=current_user.id).first()
     if not settings or not settings.gmail_address or not settings.gmail_app_password_encrypted:
         raise SendError(
             "Gmail is not connected. Go to Settings → Gmail and enter your "
@@ -146,7 +146,7 @@ def send_draft(db: Session, draft_id: int) -> dict:
         )
 
     draft = db.get(models.EmailDraft, draft_id)
-    if not draft:
+    if not draft or draft.user_id != current_user.id:
         raise SendError(f"Draft {draft_id} not found.")
     if draft.sent_at:
         raise SendError(f"Draft {draft_id} was already sent on {draft.sent_at.isoformat()}.")
@@ -173,7 +173,7 @@ def send_draft(db: Session, draft_id: int) -> dict:
         raise SendError(str(exc))
 
     # Build MIME message
-    user = db.get(models.User, 1)
+    user = current_user
     from_name = (settings.gmail_send_name or "").strip() \
         or (user.preferred_name or user.name if user else "").strip() \
         or settings.gmail_address
@@ -245,6 +245,7 @@ def send_draft(db: Session, draft_id: int) -> dict:
     # Log to activity table if present
     try:
         db.add(models.Activity(
+            user_id=current_user.id,
             kind="email_sent",
             professor_id=prof.id,
             payload={"draft_id": draft.id, "to": to_addr, "subject": subject},
@@ -268,14 +269,14 @@ def send_draft(db: Session, draft_id: int) -> dict:
     }
 
 
-def send_reply(db: Session, reply_id: int) -> dict:
+def send_reply(db: Session, current_user: models.User, reply_id: int) -> dict:
     """Send the composed response to an inbound EmailReply via Gmail SMTP.
 
     The message is threaded (In-Reply-To / References) so it lands in the
     same Gmail conversation. No attachment is added — the CV already went
     out with the initial outreach email.
     """
-    settings = db.get(models.Settings, 1)
+    settings = db.query(models.Settings).filter_by(user_id=current_user.id).first()
     if not settings or not settings.gmail_address or not settings.gmail_app_password_encrypted:
         raise SendError(
             "Gmail is not connected. Go to Settings → Gmail and enter your "
@@ -283,7 +284,7 @@ def send_reply(db: Session, reply_id: int) -> dict:
         )
 
     reply = db.get(models.EmailReply, reply_id)
-    if not reply:
+    if not reply or reply.user_id != current_user.id:
         raise SendError(f"Reply {reply_id} not found.")
     if reply.response_sent_at:
         raise SendError(f"A response to this reply was already sent on {reply.response_sent_at.isoformat()}.")
@@ -310,7 +311,7 @@ def send_reply(db: Session, reply_id: int) -> dict:
     except RuntimeError as exc:
         raise SendError(str(exc))
 
-    user = db.get(models.User, 1)
+    user = current_user
     from_name = (settings.gmail_send_name or "").strip() \
         or (user.preferred_name or user.name if user else "").strip() \
         or settings.gmail_address
@@ -353,6 +354,7 @@ def send_reply(db: Session, reply_id: int) -> dict:
 
     try:
         db.add(models.Activity(
+            user_id=current_user.id,
             kind="reply_sent",
             professor_id=reply.professor_id,
             payload={"reply_id": reply.id, "to": to_addr, "subject": subject},
