@@ -104,7 +104,8 @@ export type DesktopStatus = {
 
 export type AuthStatus = {
   authenticated: boolean
-  username: string
+  user_id?: number
+  account_email?: string | null
 }
 
 export type Draft = {
@@ -372,8 +373,28 @@ export type DiscoveryCandidate = {
   match_score: number | null
   matched_reasons: string[] | null
   scored_at: string | null
+  openalex_author_id: string | null
+  orcid: string | null
+  works_count: number | null
+  cited_by_count: number | null
+  h_index: number | null
+  first_pub_year: number | null
+  career_stage: string | null
+  topic_match_count: number | null
+  semantic_score: number | null
   created_at: string
   updated_at: string
+}
+
+export type AdminUser = {
+  id: number
+  account_email: string | null
+  name: string
+  is_admin: boolean
+  is_active: boolean
+  credit_cap_usd: number | null
+  credit_used_usd: number | null
+  created_at: string | null
 }
 
 export type UserProfile = {
@@ -392,6 +413,10 @@ export type UserProfile = {
   twitter: string | null
   phd_year: number | null
   phd_institution: string | null
+  is_admin: boolean
+  credit_cap_usd: number | null
+  credit_used_usd: number | null
+  credit_remaining_usd: number | null
 }
 
 // Rich profile — returned by GET /api/user. Superset of UserProfile + nested
@@ -657,12 +682,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   authStatus: () => request<AuthStatus>('/api/auth/status'),
-  login: (username: string, password: string) =>
-    request<{ ok: boolean; username: string }>('/api/auth/login', {
+  login: (email: string, password: string) =>
+    request<{ ok: boolean; user_id: number; account_email: string }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ account_email: email, password }),
+    }),
+  signup: (email: string, password: string, name?: string) =>
+    request<{ ok: boolean; user_id: number; account_email: string }>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ account_email: email, password, name: name || '' }),
     }),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  adminListUsers: () => request<AdminUser[]>('/api/admin/users'),
+  adminPatchUser: (
+    id: number,
+    patch: Partial<{ credit_cap_usd: number | null; is_admin: boolean; is_active: boolean }>,
+  ) =>
+    request<AdminUser>(`/api/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
   health: () => request<{ ok: boolean; time: string }>('/api/health'),
   stats: () => request<Stats>('/api/stats'),
   professors: (params?: { q?: string; status?: string; tier?: string; category?: string }) => {
@@ -803,17 +842,11 @@ export const api = {
   discoveryRun: (id: number) => request<DiscoveryRun>(`/api/discovery/runs/${id}`),
   discoveryUniversities: (id: number) =>
     request<DiscoveryUniversity[]>(`/api/discovery/runs/${id}/universities`),
-  seedDiscoveryPages: (id: number) =>
-    request<DiscoveryRun>(`/api/discovery/runs/${id}/seed-pages`, { method: 'POST' }),
   discoveryDepartments: (id: number) =>
     request<DiscoveryDepartment[]>(`/api/discovery/runs/${id}/departments`),
   discoveryPages: (id: number) => request<DiscoveryPage[]>(`/api/discovery/runs/${id}/pages`),
-  extractDiscoveryCandidates: (id: number) =>
-    request<DiscoveryRun>(`/api/discovery/runs/${id}/extract-candidates`, { method: 'POST' }),
   discoveryCandidates: (id: number) =>
     request<DiscoveryCandidate[]>(`/api/discovery/runs/${id}/candidates`),
-  verifyDiscoveryCandidates: (id: number) =>
-    request<{ updated: number; verified: number; rejected: number }>(`/api/discovery/runs/${id}/verify-candidates`, { method: 'POST' }),
   promoteDiscoveryCandidate: (id: number) =>
     request<Professor>(`/api/discovery/candidates/${id}/promote`, { method: 'POST' }),
   promoteVerifiedDiscoveryCandidates: (id: number) =>

@@ -19,14 +19,16 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - ../applications.md:/app/seed/applications.md:ro
     restart: unless-stopped
     environment:
       - POSTDOC_DB=/app/data/postdoc.db
-      - APPLICATIONS_MD=/app/seed/applications.md
       - POSTDOC_STATIC_DIR=/app/static
       - POSTDOC_DISABLE_REPLY_POLLER=1
       - SCRAPER_URL=http://scraper:8001
+      # Discovery v2 — non-secret defaults. Secret keys (OPENAI_API_KEY,
+      # TAVILY_API_KEY / WEBSEARCH_API_KEY) live in .env (loaded via env_file).
+      - OPENALEX_MAILTO=${OPENALEX_MAILTO:-quill@devnook.xyz}
+      - WEBSEARCH_PROVIDER=${WEBSEARCH_PROVIDER:-tavily}
     depends_on:
       scraper:
         condition: service_healthy

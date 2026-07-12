@@ -930,11 +930,10 @@ function DiscoveryRunStatus({ run, coverage, universities, departments, pages, c
   )
 }
 
-function DiscoveryCandidateReview({ run, candidates, busy, onVerify, onPromote, onPromoteAll, onReject }: {
+function DiscoveryCandidateReview({ run, candidates, busy, onPromote, onPromoteAll, onReject }: {
   run: DiscoveryRun | null
   candidates: DiscoveryCandidate[]
   busy: string | null
-  onVerify: () => void
   onPromote: (candidate: DiscoveryCandidate) => void
   onPromoteAll: () => void
   onReject: (candidate: DiscoveryCandidate) => void
@@ -948,8 +947,6 @@ function DiscoveryCandidateReview({ run, candidates, busy, onVerify, onPromote, 
   })
   const visible = sorted.slice(0, 12)
   const verifiedReady = candidates.filter((candidate) => candidate.verification_status === 'verified' && !candidate.professor_id).length
-  const pending = candidates.filter((candidate) => candidate.verification_status === 'pending').length
-  const busyVerify = busy === 'verify'
   const busyPromoteAll = busy === 'promote-all'
 
   return (
@@ -958,18 +955,12 @@ function DiscoveryCandidateReview({ run, candidates, busy, onVerify, onPromote, 
       <div className="px-4 py-3 border-b flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
         style={{ borderColor: 'var(--color-line)', background: 'color-mix(in srgb, var(--color-paper) 70%, var(--color-white))' }}>
         <div>
-          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Extracted candidates</h2>
+          <h2 className="text-[13px] font-bold" style={{ color: 'var(--color-ink)' }}>Matched professors</h2>
           <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
-            {candidates.length} extracted · {run.candidates_verified} verified · {run.candidates_rejected} rejected or duplicate
+            {candidates.length} matched · {run.candidates_verified} with verified contact · ranked by fit to your profile
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={onVerify} disabled={busyVerify || pending === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-[12px] font-medium disabled:opacity-50"
-            style={{ borderColor: 'var(--color-brand-400)', background: 'var(--color-brand-50)', color: 'var(--color-brand-700)' }}>
-            {busyVerify ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            Verify & score
-          </button>
           <button onClick={onPromoteAll} disabled={busyPromoteAll || verifiedReady === 0}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold disabled:opacity-50"
             style={{ background: 'var(--color-ink)', color: 'white' }}>
@@ -1001,6 +992,20 @@ function DiscoveryCandidateReview({ run, candidates, busy, onVerify, onPromote, 
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
                   {[candidate.university_name, candidate.dept_lab, candidate.country].filter(Boolean).join(' · ')}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]" style={{ color: 'var(--color-muted)' }}>
+                  {candidate.career_stage && (
+                    <span style={{ color: candidate.career_stage === 'early' ? 'var(--color-green-700)' : 'var(--color-muted)' }}>
+                      {candidate.career_stage}-career{candidate.career_stage === 'early' ? ' · hires more' : ''}
+                    </span>
+                  )}
+                  {typeof candidate.h_index === 'number' && <span>h-index {candidate.h_index}</span>}
+                  {typeof candidate.topic_match_count === 'number' && candidate.topic_match_count > 0 && (
+                    <span>{candidate.topic_match_count} papers in your topics</span>
+                  )}
+                  {candidate.email && (
+                    <a href={`mailto:${candidate.email}`} style={{ color: 'var(--color-brand-600)' }}>{candidate.email}</a>
+                  )}
                 </div>
                 <p className="text-[12px] mt-1.5 leading-relaxed line-clamp-2" style={{ color: 'var(--color-ink-soft)' }}>
                   {candidate.research_text || candidate.evidence_summary || candidate.rejection_reason || 'No evidence summary captured.'}
@@ -1582,20 +1587,6 @@ export function Discover() {
     setDiscoveryRunning(false)
   }
 
-  const verifyDiscoveryCandidates = async () => {
-    if (!discoveryRun || candidateAction) return
-    setCandidateAction('verify')
-    setErr(null)
-    try {
-      await api.verifyDiscoveryCandidates(discoveryRun.id)
-      await refreshDiscovery()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setCandidateAction(null)
-    }
-  }
-
   const promoteDiscoveryCandidate = async (candidate: DiscoveryCandidate) => {
     if (candidateAction) return
     setCandidateAction(`promote-${candidate.id}`)
@@ -1782,7 +1773,6 @@ export function Discover() {
         run={discoveryRun}
         candidates={discoveryCandidates}
         busy={candidateAction}
-        onVerify={verifyDiscoveryCandidates}
         onPromote={promoteDiscoveryCandidate}
         onPromoteAll={promoteAllVerifiedDiscoveryCandidates}
         onReject={rejectDiscoveryCandidate}

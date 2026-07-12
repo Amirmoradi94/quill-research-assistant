@@ -16,6 +16,7 @@ import { AiRuns } from '@/pages/AiRuns'
 import { Profile } from '@/pages/Profile'
 import { InterviewPrep } from '@/pages/InterviewPrep'
 import { Login } from '@/pages/Login'
+import { Admin } from '@/pages/Admin'
 import { api } from '@/lib/api'
 
 export default function App() {
@@ -27,8 +28,13 @@ export default function App() {
       .catch(() => setAuth('out'))
   }, [])
 
-  const login = async (username: string, password: string) => {
-    await api.login(username, password)
+  const login = async (email: string, password: string) => {
+    await api.login(email, password)
+    setAuth('in')
+  }
+
+  const signup = async (email: string, password: string, name?: string) => {
+    await api.signup(email, password, name)
     setAuth('in')
   }
 
@@ -45,7 +51,7 @@ export default function App() {
     <BrowserRouter>
       {auth === 'out' ? (
         <Routes>
-          <Route path="/login" element={<Login onLogin={login} />} />
+          <Route path="/login" element={<Login onLogin={login} onSignup={signup} />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       ) : (
@@ -67,6 +73,7 @@ export default function App() {
             <Route path="activity"   element={<ActivityPage />} />
             <Route path="ai-runs"    element={<AiRuns />} />
             <Route path="settings"   element={<Settings />} />
+            <Route path="admin"      element={<Admin />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -23,6 +24,17 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
+
+    # Account / login identity — distinct from the researcher's contact `email`
+    # below (which is used in application drafts and may be blank or shared).
+    account_email = Column(String, nullable=True, unique=True, index=True)
+    password_hash = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    # Admins are exempt from the lifetime AI credit cap below.
+    is_admin = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Lifetime AI spend cap in USD; None falls back to DEFAULT_CREDIT_CAP_USD.
+    credit_cap_usd = Column(Float, nullable=True, default=10.0, server_default="10.0")
 
     # Identity
     name = Column(String, nullable=False, default="")          # legal name
@@ -93,6 +105,13 @@ class User(Base):
     # Shape: {"field_name": {"source":"cv","confidence":0.9,"extracted_at":"...","verified_by_user":false}}
     field_provenance = Column(JSON, nullable=True)
     cv_last_extracted_at = Column(DateTime, nullable=True)
+
+    # Discovery query-profile cache (populated by discovery_v2 Phase A). Lets
+    # repeat runs skip re-deriving the user's OpenAlex topics + embedding.
+    discovery_topic_ids = Column(JSON, nullable=True)          # ["T10603", ...]
+    discovery_summary = Column(Text, nullable=True)            # 2-3 sentence research summary
+    discovery_embedding = Column(JSON, nullable=True)          # list[float] of the summary
+    discovery_profile_built_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -205,6 +224,7 @@ class Settings(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True, unique=True)
     ai_provider = Column(String, nullable=False, default="openrouter_api")
     claude_cli_path = Column(String, nullable=True)
     codex_cli_path = Column(String, nullable=True)
@@ -212,6 +232,8 @@ class Settings(Base):
     openai_api_key = Column(String, nullable=True)
     openrouter_api_key = Column(String, nullable=True)
     openrouter_model = Column(String, nullable=False, default="z-ai/glm-5.2")
+    # Web-search provider key for discovery contact-resolution (Tavily/Brave/etc.).
+    websearch_api_key = Column(String, nullable=True)
     default_provider_per_workflow = Column(JSON, nullable=True)
     email_tone_rules = Column(Text, nullable=True)
     daily_cost_cap_usd = Column(Float, nullable=False, default=5.0)
@@ -240,8 +262,12 @@ class Settings(Base):
 # ───────────────────────────────────────────────────────────────────
 class Professor(Base):
     __tablename__ = "professors"
+    __table_args__ = (
+        Index("ix_professors_user_id_status", "user_id", "status"),
+    )
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     number = Column(Integer, index=True)
     name = Column(String, nullable=False)
     university = Column(String, index=True)
@@ -309,6 +335,7 @@ class DiscoveryRun(Base):
     __tablename__ = "discovery_runs"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     status = Column(String, nullable=False, default="queued", index=True)  # queued|running|done|failed|cancelled
     phase = Column(String, nullable=False, default="schema")               # universities|departments|pages|candidates|scoring
     position_type = Column(String, nullable=True)
@@ -473,6 +500,18 @@ class DiscoveryCandidate(Base):
     rejection_reason = Column(Text, nullable=True)
     match_score = Column(Integer, nullable=True, index=True)
     matched_reasons = Column(JSON, nullable=True)
+
+    # Discovery v2 (retrieval-first) enrichment signals.
+    openalex_author_id = Column(String, nullable=True, index=True)
+    orcid = Column(String, nullable=True)
+    s2_author_id = Column(String, nullable=True)
+    works_count = Column(Integer, nullable=True)
+    cited_by_count = Column(Integer, nullable=True)
+    h_index = Column(Integer, nullable=True)
+    first_pub_year = Column(Integer, nullable=True)
+    career_stage = Column(String, nullable=True)               # early|mid|senior
+    topic_match_count = Column(Integer, nullable=True)         # recent papers in the user's topics
+    semantic_score = Column(Float, nullable=True)              # cosine vs user embedding
     scored_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -521,6 +560,7 @@ class EmailDraft(Base):
     __tablename__ = "email_drafts"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     professor_id = Column(Integer, ForeignKey("professors.id"), index=True, nullable=False)
     subject = Column(String, default="")
     body = Column(Text, default="")
@@ -551,6 +591,7 @@ class EmailReply(Base):
     __tablename__ = "email_replies"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     draft_id = Column(Integer, ForeignKey("email_drafts.id"), index=True, nullable=False)
     professor_id = Column(Integer, ForeignKey("professors.id"), index=True, nullable=False)
     received_at = Column(DateTime, nullable=False, index=True)
@@ -583,6 +624,7 @@ class InterviewPrep(Base):
     __tablename__ = "interview_prep"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     professor_id = Column(Integer, ForeignKey("professors.id"), index=True, nullable=False)
     reply_id = Column(Integer, ForeignKey("email_replies.id"), nullable=True)
 
@@ -612,6 +654,7 @@ class MockInterview(Base):
     __tablename__ = "mock_interview"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     prep_id = Column(Integer, ForeignKey("interview_prep.id"), index=True, nullable=False)
     transcript = Column(JSON, nullable=True)               # [{"role":"professor|applicant|feedback","text":"...","at":"..."}]
     status = Column(String, nullable=False, default="active")  # active|completed
@@ -626,6 +669,7 @@ class Grant(Base):
     __tablename__ = "grants"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     deadline = Column(String, default="")
     amount = Column(String, default="")
@@ -644,8 +688,12 @@ class Grant(Base):
 
 class Activity(Base):
     __tablename__ = "activities"
+    __table_args__ = (
+        Index("ix_activities_user_id_created_at", "user_id", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     date = Column(Date, default=datetime.utcnow)
     action = Column(String, nullable=False)
     detail = Column(Text, default="")
@@ -662,6 +710,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     kind = Column(String, nullable=False, index=True)
     title = Column(String, nullable=False)
     file_path = Column(String, nullable=True)
@@ -677,6 +726,7 @@ class Publication(Base):
     __tablename__ = "publications"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     title = Column(String, nullable=False)
     venue = Column(String, nullable=True)
     year = Column(Integer, nullable=True)
@@ -694,8 +744,12 @@ class Publication(Base):
 # ───────────────────────────────────────────────────────────────────
 class AIRun(Base):
     __tablename__ = "ai_runs"
+    __table_args__ = (
+        Index("ix_ai_runs_user_id_created_at", "user_id", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     workflow = Column(String, nullable=False, index=True)
     provider = Column(String, nullable=False)
     status = Column(String, nullable=False, default="queued", index=True)
@@ -725,6 +779,7 @@ class Recommender(Base):
     __tablename__ = "recommenders"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     email = Column(String, nullable=True)
     relationship_kind = Column("relationship", String, nullable=True)  # avoid SQLAlchemy `relationship` clash
@@ -737,6 +792,7 @@ class Application(Base):
     __tablename__ = "applications"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     professor_id = Column(Integer, ForeignKey("professors.id"), nullable=True, index=True)
     title = Column(String, nullable=False)
     deadline = Column(Date, nullable=True)
@@ -783,6 +839,7 @@ class CalendarEvent(Base):
     __tablename__ = "calendar_events"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     title = Column(String, nullable=False)
     date = Column(Date, nullable=False, index=True)
     time = Column(String, nullable=True)        # "HH:MM" 24h

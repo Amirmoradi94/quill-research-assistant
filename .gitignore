@@ -51,3 +51,5 @@ web/src-tauri/binaries/*
 
 # Local app runtime data
 data/
+
+keys/

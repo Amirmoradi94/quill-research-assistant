@@ -880,6 +880,9 @@
   .gap-x-5 {
     column-gap: calc(var(--spacing) * 5);
   }
+  .gap-y-0\.5 {
+    row-gap: calc(var(--spacing) * 0.5);
+  }
   .gap-y-4 {
     row-gap: calc(var(--spacing) * 4);
   }

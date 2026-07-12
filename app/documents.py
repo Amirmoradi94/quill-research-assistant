@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from .database import get_db
 from . import models
+from .auth import get_current_user
 from .runtime import documents_dir
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -115,8 +116,8 @@ def _doc_to_dict(d: models.Document) -> dict:
 
 
 @router.get("")
-def list_documents(kind: Optional[str] = None, db: Session = Depends(get_db)):
-    q = db.query(models.Document)
+def list_documents(kind: Optional[str] = None, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(models.Document).filter(models.Document.user_id == current_user.id)
     if kind:
         q = q.filter(models.Document.kind == kind)
     rows = q.order_by(models.Document.is_default.desc(), models.Document.created_at.desc()).all()
@@ -130,6 +131,7 @@ async def upload_document(
     title: Optional[str] = Form(None),
     is_default: bool = Form(False),
     file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if kind not in ALLOWED_KINDS:
@@ -140,11 +142,14 @@ async def upload_document(
     if len(contents) == 0:
         raise HTTPException(400, "Empty file.")
 
-    kind_dir = DATA_DIR / kind
+    # Namespaced by user id as defense-in-depth; the real security boundary
+    # is the `user_id` filter on every query below, not the file path.
+    kind_dir = DATA_DIR / str(current_user.id) / kind
     kind_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = _slugify(file.filename or "upload")
     doc = models.Document(
+        user_id=current_user.id,
         kind=kind,
         title=title or (file.filename or safe_name),
         is_default=is_default,
@@ -161,6 +166,7 @@ async def upload_document(
 
     if is_default:
         db.query(models.Document).filter(
+            models.Document.user_id == current_user.id,
             models.Document.kind == kind,
             models.Document.id != doc.id,
         ).update({"is_default": False})
@@ -171,21 +177,17 @@ async def upload_document(
     # If this is a CV upload, auto-wire it to the user profile and kick off
     # the LLM extraction so the Profile page populates without user action.
     # Same for transcripts — add them to user.transcript_doc_ids.
-    _autowire_to_user_profile(db, doc, is_default, background_tasks)
+    _autowire_to_user_profile(db, current_user, doc, is_default, background_tasks)
 
     return _doc_to_dict(doc)
 
 
 def _autowire_to_user_profile(
-    db: Session, doc: models.Document, is_default: bool, background_tasks: BackgroundTasks
+    db: Session, user: models.User, doc: models.Document, is_default: bool, background_tasks: BackgroundTasks
 ) -> None:
-    """When a CV or transcript is uploaded, link it to users(id=1) and trigger
-    profile extraction in the background. Runs silently — the user just sees
-    their Profile page populate over the next ~30s."""
-    user = db.get(models.User, 1)
-    if not user:
-        return
-
+    """When a CV or transcript is uploaded, link it to the uploading user's
+    profile and trigger profile extraction in the background. Runs silently —
+    the user just sees their Profile page populate over the next ~30s."""
     should_trigger_extraction = False
     if doc.kind == "cv":
         # Set as primary CV if user has none, or if explicitly marked default.
@@ -210,10 +212,10 @@ def _autowire_to_user_profile(
     db.commit()
 
     if should_trigger_extraction:
-        background_tasks.add_task(_run_profile_extraction_silently)
+        background_tasks.add_task(_run_profile_extraction_silently, user.id)
 
 
-def _run_profile_extraction_silently() -> None:
+def _run_profile_extraction_silently(user_id: int) -> None:
     """Spawn the extract_user_profile_full workflow and drain its SSE stream
     so the on-success handler in quill.py writes the extracted fields back to
     the DB. We swallow exceptions — failures are visible via /api/ai/runs."""
@@ -226,7 +228,10 @@ def _run_profile_extraction_silently() -> None:
 
     db = SessionLocal()
     try:
-        settings = _settings(db)
+        user = db.get(models.User, user_id)
+        if user is None:
+            return
+        settings = _settings(db, user)
         provider = _select_provider_for(settings)
         if provider is None:
             return  # no provider configured — silently no-op
@@ -238,6 +243,7 @@ def _run_profile_extraction_silently() -> None:
 
         # Persist an AIRun row up-front so it shows up in /ai-runs.
         run = models.AIRun(
+            user_id=user.id,
             workflow=Workflow.EXTRACT_USER_PROFILE_FULL.value,
             provider=provider.value,
             status="queued",
@@ -247,7 +253,7 @@ def _run_profile_extraction_silently() -> None:
         db.refresh(run)
         run_id = run.id
 
-        base_ctx = _resolve_user_context(db)
+        base_ctx = _resolve_user_context(user)
         request = RunRequest(
             workflow=Workflow.EXTRACT_USER_PROFILE_FULL,
             params=base_ctx,
@@ -274,9 +280,9 @@ def _run_profile_extraction_silently() -> None:
 
 
 @router.get("/{doc_id}")
-def get_document(doc_id: int, db: Session = Depends(get_db)):
+def get_document(doc_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.Document, doc_id)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "Document not found.")
     out = _doc_to_dict(d)
     out["text"] = d.text or ""
@@ -284,9 +290,9 @@ def get_document(doc_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{doc_id}/file")
-def download_document(doc_id: int, db: Session = Depends(get_db)):
+def download_document(doc_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.Document, doc_id)
-    if not d or not d.file_path:
+    if not d or d.user_id != current_user.id or not d.file_path:
         raise HTTPException(404, "Document not found.")
     p = Path(d.file_path)
     if not p.exists():
@@ -295,14 +301,15 @@ def download_document(doc_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/{doc_id}")
-def update_document(doc_id: int, payload: dict, db: Session = Depends(get_db)):
+def update_document(doc_id: int, payload: dict, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.Document, doc_id)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "Document not found.")
     if "title" in payload and isinstance(payload["title"], str):
         d.title = payload["title"]
     if "is_default" in payload and bool(payload["is_default"]):
         db.query(models.Document).filter(
+            models.Document.user_id == current_user.id,
             models.Document.kind == d.kind,
             models.Document.id != d.id,
         ).update({"is_default": False})
@@ -316,9 +323,9 @@ def update_document(doc_id: int, payload: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/{doc_id}", status_code=204)
-def delete_document(doc_id: int, db: Session = Depends(get_db)):
+def delete_document(doc_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = db.get(models.Document, doc_id)
-    if not d:
+    if not d or d.user_id != current_user.id:
         raise HTTPException(404, "Document not found.")
     if d.file_path:
         p = Path(d.file_path)

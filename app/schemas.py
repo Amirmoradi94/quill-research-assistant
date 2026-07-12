@@ -476,6 +476,16 @@ class DiscoveryCandidateOut(BaseModel):
     match_score: Optional[int] = None
     matched_reasons: Optional[List[str]] = None
     scored_at: Optional[datetime] = None
+    # Discovery v2 enrichment signals
+    openalex_author_id: Optional[str] = None
+    orcid: Optional[str] = None
+    works_count: Optional[int] = None
+    cited_by_count: Optional[int] = None
+    h_index: Optional[int] = None
+    first_pub_year: Optional[int] = None
+    career_stage: Optional[str] = None
+    topic_match_count: Optional[int] = None
+    semantic_score: Optional[float] = None
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
